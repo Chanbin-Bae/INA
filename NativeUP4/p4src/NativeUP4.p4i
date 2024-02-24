@@ -1,0 +1,3408 @@
+# 1 "IITP/NativeUP4/p4src/NativeUP4.p4"
+# 1 "<built-in>"
+# 1 "<command-line>"
+# 1 "IITP/NativeUP4/p4src/NativeUP4.p4"
+# 1 "/usr/share/p4c/p4include/core.p4" 1
+/*
+Copyright 2013-present Barefoot Networks, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/* This is the P4-16 core library, which declares some built-in P4 constructs using P4 */
+
+
+
+
+/// Standard error codes.  New error codes can be declared by users.
+error {
+    NoError, /// No error.
+    PacketTooShort, /// Not enough bits in packet for 'extract'.
+    NoMatch, /// 'select' expression has no matches.
+    StackOutOfBounds, /// Reference to invalid element of a header stack.
+    HeaderTooShort, /// Extracting too many bits into a varbit field.
+    ParserTimeout, /// Parser execution time limit exceeded.
+    ParserInvalidArgument /// Parser operation was called with a value
+                           /// not supported by the implementation.
+}
+
+extern packet_in {
+    /// Read a header from the packet into a fixed-sized header @hdr and advance the cursor.
+    /// May trigger error PacketTooShort or StackOutOfBounds.
+    /// @T must be a fixed-size header type
+    void extract<T>(out T hdr);
+    /// Read bits from the packet into a variable-sized header @variableSizeHeader
+    /// and advance the cursor.
+    /// @T must be a header containing exactly 1 varbit field.
+    /// May trigger errors PacketTooShort, StackOutOfBounds, or HeaderTooShort.
+    void extract<T>(out T variableSizeHeader,
+                    in bit<32> variableFieldSizeInBits);
+    /// Read bits from the packet without advancing the cursor.
+    /// @returns: the bits read from the packet.
+    /// T may be an arbitrary fixed-size type.
+    T lookahead<T>();
+    /// Advance the packet cursor by the specified number of bits.
+    void advance(in bit<32> sizeInBits);
+    /// @return packet length in bytes.  This method may be unavailable on
+    /// some target architectures.
+    bit<32> length();
+}
+
+extern packet_out {
+    /// Write @hdr into the output packet, advancing cursor.
+    /// @T can be a header type, a header stack, a header_union, or a struct
+    /// containing fields with such types.
+    void emit<T>(in T hdr);
+}
+
+// TODO: remove from this file, convert to built-in
+/// Check a predicate @check in the parser; if the predicate is true do nothing,
+/// otherwise set the parser error to @toSignal, and transition to the `reject` state.
+extern void verify(in bool check, in error toSignal);
+
+/// Built-in action that does nothing.
+@noWarn("unused")
+action NoAction() {}
+
+/// Standard match kinds for table key fields.
+/// Some architectures may not support all these match kinds.
+/// Architectures can declare additional match kinds.
+match_kind {
+    /// Match bits exactly.
+    exact,
+    /// Ternary match, using a mask.
+    ternary,
+    /// Longest-prefix match.
+    lpm
+}
+
+/// Static assert evaluates a boolean expression
+/// at compilation time.  If the expression evaluates to
+/// false, compilation is stopped and the corresponding message is printed.
+/// The function returns a boolean, so that it can be used
+/// as a global constant value in a program, e.g.:
+/// const bool _check = static_assert(V1MODEL_VERSION > 20180000, "Expected a v1 model version >= 20180000");
+extern bool static_assert(bool check, string message);
+
+/// Like the above but using a default message.
+extern bool static_assert(bool check);
+# 2 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "/usr/share/p4c/p4include/v1model.p4" 1
+/*
+Copyright 2013-present Barefoot Networks, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/* P4-16 declaration of the P4 v1.0 switch model */
+
+/* Note 1: More details about the definition of v1model architecture
+ * can be found at the location below.
+ *
+ * https://github.com/p4lang/behavioral-model/blob/main/docs/simple_switch.md
+ *
+ * Note 3: There are at least some P4_14 implementations where
+ * invoking a generate_digest operation on a field_list will create a
+ * message to the control plane that contains the values of those
+ * fields when the ingress control is finished executing, which can be
+ * different than the values those fields have at the time the
+ * generate_digest operation is invoked in the program, if those field
+ * values are changed later in the execution of the P4_14 ingress
+ * control.
+ *
+ * The P4_16 plus v1model implementation should always create digest
+ * messages that contain the values of the specified fields at the
+ * time that the digest extern function is called.  Thus if a P4_14
+ * program expecting the behavior described above is compiled using
+ * p4c, it may behave differently.
+ */
+
+
+
+
+# 1 "/usr/share/p4c/p4include/core.p4" 1
+/*
+Copyright 2013-present Barefoot Networks, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/* This is the P4-16 core library, which declares some built-in P4 constructs using P4 */
+# 44 "/usr/share/p4c/p4include/v1model.p4" 2
+
+
+
+
+
+match_kind {
+    range,
+    // Either an exact match, or a wildcard (matching any value).
+    optional,
+    // Used for implementing dynamic_action_selection
+    selector
+}
+
+const bit<32> __v1model_version = 20180101;
+
+
+
+
+
+@metadata @name("standard_metadata")
+struct standard_metadata_t {
+
+
+
+
+
+    bit<9> ingress_port;
+    bit<9> egress_spec;
+    bit<9> egress_port;
+
+    bit<32> instance_type;
+    bit<32> packet_length;
+    //
+    // @alias is used to generate the field_alias section of the BMV2 JSON.
+    // Field alias creates a mapping from the metadata name in P4 program to
+    // the behavioral model's internal metadata name. Here we use it to
+    // expose all metadata supported by simple switch to the user through
+    // standard_metadata_t.
+    //
+    // flattening fields that exist in bmv2-ss
+    // queueing metadata
+    @alias("queueing_metadata.enq_timestamp")
+    bit<32> enq_timestamp;
+    @alias("queueing_metadata.enq_qdepth")
+    bit<19> enq_qdepth;
+    @alias("queueing_metadata.deq_timedelta")
+    bit<32> deq_timedelta;
+    /// queue depth at the packet dequeue time.
+    @alias("queueing_metadata.deq_qdepth")
+    bit<19> deq_qdepth;
+
+    // intrinsic metadata
+    @alias("intrinsic_metadata.ingress_global_timestamp")
+    bit<48> ingress_global_timestamp;
+    @alias("intrinsic_metadata.egress_global_timestamp")
+    bit<48> egress_global_timestamp;
+    /// multicast group id (key for the mcast replication table)
+    @alias("intrinsic_metadata.mcast_grp")
+    bit<16> mcast_grp;
+    /// Replication ID for multicast
+    @alias("intrinsic_metadata.egress_rid")
+    bit<16> egress_rid;
+    /// Indicates that a verify_checksum() method has failed.
+    /// 1 if a checksum error was found, otherwise 0.
+    bit<1> checksum_error;
+    /// Error produced by parsing
+    error parser_error;
+    /// set packet priority
+    @alias("intrinsic_metadata.priority")
+    bit<3> priority;
+}
+
+enum CounterType {
+    packets,
+    bytes,
+    packets_and_bytes
+}
+
+enum MeterType {
+    packets,
+    bytes
+}
+
+extern counter
+
+
+
+{
+    /***
+     * A counter object is created by calling its constructor.  This
+     * creates an array of counter states, with the number of counter
+     * states specified by the size parameter.  The array indices are
+     * in the range [0, size-1].
+     *
+     * You must provide a choice of whether to maintain only a packet
+     * count (CounterType.packets), only a byte count
+     * (CounterType.bytes), or both (CounterType.packets_and_bytes).
+     *
+     * Counters can be updated from your P4 program, but can only be
+     * read from the control plane.  If you need something that can be
+     * both read and written from the P4 program, consider using a
+     * register.
+     */
+    counter(bit<32> size, CounterType type);
+    // FIXME -- size arg should be `int` but that breaks typechecking
+
+    /***
+     * count() causes the counter state with the specified index to be
+     * read, modified, and written back, atomically relative to the
+     * processing of other packets, updating the packet count, byte
+     * count, or both, depending upon the CounterType of the counter
+     * instance used when it was constructed.
+     *
+     * @param index The index of the counter state in the array to be
+     *              updated, normally a value in the range [0,
+     *              size-1].  If index >= size, no counter state will be
+     *              updated.
+     */
+
+
+
+    void count(in bit<32> index);
+
+}
+
+extern direct_counter {
+    /***
+     * A direct_counter object is created by calling its constructor.
+     * You must provide a choice of whether to maintain only a packet
+     * count (CounterType.packets), only a byte count
+     * (CounterType.bytes), or both (CounterType.packets_and_bytes).
+     * After constructing the object, you can associate it with at
+     * most one table, by adding the following table property to the
+     * definition of that table:
+     *
+     *     counters = <object_name>;
+     *
+     * Counters can be updated from your P4 program, but can only be
+     * read from the control plane.  If you need something that can be
+     * both read and written from the P4 program, consider using a
+     * register.
+     */
+    direct_counter(CounterType type);
+    /***
+     * The count() method is actually unnecessary in the v1model
+     * architecture.  This is because after a direct_counter object
+     * has been associated with a table as described in the
+     * documentation for the direct_counter constructor, every time
+     * the table is applied and a table entry is matched, the counter
+     * state associated with the matching entry is read, modified, and
+     * written back, atomically relative to the processing of other
+     * packets, regardless of whether the count() method is called in
+     * the body of that action.
+     */
+    void count();
+}
+
+
+
+
+
+extern meter
+
+
+
+{
+    /***
+     * A meter object is created by calling its constructor.  This
+     * creates an array of meter states, with the number of meter
+     * states specified by the size parameter.  The array indices are
+     * in the range [0, size-1].  For example, if in your system you
+     * have 128 different "flows" numbered from 0 up to 127, and you
+     * want to meter each of those flows independently of each other,
+     * you could do so by creating a meter object with size=128.
+     *
+     * You must provide a choice of whether to meter based on the
+     * number of packets, regardless of their size
+     * (MeterType.packets), or based upon the number of bytes the
+     * packets contain (MeterType.bytes).
+     */
+    meter(bit<32> size, MeterType type);
+    // FIXME -- size arg should be `int` but that breaks typechecking
+
+    /***
+     * execute_meter() causes the meter state with the specified index
+     * to be read, modified, and written back, atomically relative to
+     * the processing of other packets, and an integer encoding of one
+     * of the colors green, yellow, or red to be written to the result
+     * out parameter.
+     *
+     * @param index The index of the meter state in the array to be
+     *              updated, normally a value in the range [0,
+     *              size-1].  If index >= size, no meter state will be
+     *              updated.
+     * @param result Type T must be bit<W> with W >= 2.  When index is
+     *              in range, the value of result will be assigned 0
+     *              for color GREEN, 1 for color YELLOW, and 2 for
+     *              color RED (see RFC 2697 and RFC 2698 for the
+     *              meaning of these colors).  When index is out of
+     *              range, the final value of result is not specified,
+     *              and should be ignored by the caller.
+     */
+
+
+
+    void execute_meter<T>(in bit<32> index, out T result);
+
+}
+
+extern direct_meter<T> {
+    /***
+     * A direct_meter object is created by calling its constructor.
+     * You must provide a choice of whether to meter based on the
+     * number of packets, regardless of their size
+     * (MeterType.packets), or based upon the number of bytes the
+     * packets contain (MeterType.bytes).  After constructing the
+     * object, you can associate it with at most one table, by adding
+     * the following table property to the definition of that table:
+     *
+     *     meters = <object_name>;
+     */
+    direct_meter(MeterType type);
+    /***
+     * After a direct_meter object has been associated with a table as
+     * described in the documentation for the direct_meter
+     * constructor, every time the table is applied and a table entry
+     * is matched, the meter state associated with the matching entry
+     * is read, modified, and written back, atomically relative to the
+     * processing of other packets, regardless of whether the read()
+     * method is called in the body of that action.
+     *
+     * read() may only be called within an action executed as a result
+     * of matching a table entry, of a table that has a direct_meter
+     * associated with it.  Calling read() causes an integer encoding
+     * of one of the colors green, yellow, or red to be written to the
+     * result out parameter.
+     *
+     * @param result Type T must be bit<W> with W >= 2.  The value of
+     *              result will be assigned 0 for color GREEN, 1 for
+     *              color YELLOW, and 2 for color RED (see RFC 2697
+     *              and RFC 2698 for the meaning of these colors).
+     */
+    void read(out T result);
+}
+
+
+
+
+extern register<T>
+
+{
+    /***
+     * A register object is created by calling its constructor.  This
+     * creates an array of 'size' identical elements, each with type
+     * T.  The array indices are in the range [0, size-1].  For
+     * example, this constructor call:
+     *
+     *     register<bit<32>>(512) my_reg;
+     *
+     * allocates storage for 512 values, each with type bit<32>.
+     */
+    register(bit<32> size); // FIXME -- arg should be `int` but that breaks typechecking
+    /***
+     * read() reads the state of the register array stored at the
+     * specified index, and returns it as the value written to the
+     * result parameter.
+     *
+     * @param index The index of the register array element to be
+     *              read, normally a value in the range [0, size-1].
+     * @param result Only types T that are bit<W> are currently
+     *              supported.  When index is in range, the value of
+     *              result becomes the value read from the register
+     *              array element.  When index >= size, the final
+     *              value of result is not specified, and should be
+     *              ignored by the caller.
+     */
+    @noSideEffects
+
+
+
+    void read(out T result, in bit<32> index);
+
+    /***
+     * write() writes the state of the register array at the specified
+     * index, with the value provided by the value parameter.
+     *
+     * If you wish to perform a read() followed later by a write() to
+     * the same register array element, and you wish the
+     * read-modify-write sequence to be atomic relative to other
+     * processed packets, then there may be parallel implementations
+     * of the v1model architecture for which you must execute them in
+     * a P4_16 block annotated with an @atomic annotation.  See the
+     * P4_16 language specification description of the @atomic
+     * annotation for more details.
+     *
+     * @param index The index of the register array element to be
+     *              written, normally a value in the range [0,
+     *              size-1].  If index >= size, no register state will
+     *              be updated.
+     * @param value Only types T that are bit<W> are currently
+     *              supported.  When index is in range, this
+     *              parameter's value is written into the register
+     *              array element specified by index.
+     */
+
+
+
+    void write(in bit<32> index, in T value);
+
+}
+
+// used as table implementation attribute
+extern action_profile {
+    action_profile(bit<32> size);
+}
+
+/***
+ * Generate a random number in the range lo..hi, inclusive, and write
+ * it to the result parameter.  The value written to result is not
+ * specified if lo > hi.
+ *
+ * @param T          Must be a type bit<W>
+ */
+extern void random<T>(out T result, in T lo, in T hi);
+
+/***
+ * Calling digest causes a message containing the values specified in
+ * the data parameter to be sent to the control plane software.  It is
+ * similar to sending a clone of the packet to the control plane
+ * software, except that it can be more efficient because the messages
+ * are typically smaller than packets, and many such small digest
+ * messages are typically coalesced together into a larger "batch"
+ * which the control plane software processes all at once.
+ *
+ * The value of the fields that are sent in the message to the control
+ * plane is the value they have at the time the digest call occurs,
+ * even if those field values are changed by later ingress control
+ * code.  See Note 3.
+ *
+ * Calling digest is only supported in the ingress control.  There is
+ * no way to undo its effects once it has been called.
+ *
+ * If the type T is a named struct, the name is used to generate the
+ * control plane API.
+ *
+ * The BMv2 implementation of the v1model architecture ignores the
+ * value of the receiver parameter.
+ */
+extern void digest<T>(in bit<32> receiver, in T data);
+
+enum HashAlgorithm {
+    crc32,
+    crc32_custom,
+    crc16,
+    crc16_custom,
+    random,
+    identity,
+    csum16,
+    xor16
+}
+
+@deprecated("Please use mark_to_drop(standard_metadata) instead.")
+extern void mark_to_drop();
+
+/***
+ * mark_to_drop(standard_metadata) is a primitive action that modifies
+ * standard_metadata.egress_spec to an implementation-specific special
+ * value that in some cases causes the packet to be dropped at the end
+ * of ingress or egress processing.  It also assigns 0 to
+ * standard_metadata.mcast_grp.  Either of those metadata fields may
+ * be changed by executing later P4 code, after calling
+ * mark_to_drop(), and this can change the resulting behavior of the
+ * packet to do something other than drop.
+ *
+ * See
+ * https://github.com/p4lang/behavioral-model/blob/main/docs/simple_switch.md
+ * -- in particular the section "Pseudocode for what happens at the
+ * end of ingress and egress processing" -- for the relative priority
+ * of the different possible things that can happen to a packet when
+ * ingress and egress processing are complete.
+ */
+@pure
+extern void mark_to_drop(inout standard_metadata_t standard_metadata);
+
+/***
+ * Calculate a hash function of the value specified by the data
+ * parameter.  The value written to the out parameter named result
+ * will always be in the range [base, base+max-1] inclusive, if max >=
+ * 1.  If max=0, the value written to result will always be base.
+ *
+ * Note that the types of all of the parameters may be the same as, or
+ * different from, each other, and thus their bit widths are allowed
+ * to be different.
+ *
+ * @param O          Must be a type bit<W>
+ * @param D          Must be a tuple type where all the fields are bit-fields (type bit<W> or int<W>) or varbits.
+ * @param T          Must be a type bit<W>
+ * @param M          Must be a type bit<W>
+ */
+@pure
+extern void hash<O, T, D, M>(out O result, in HashAlgorithm algo, in T base, in D data, in M max);
+
+extern action_selector {
+    action_selector(HashAlgorithm algorithm, bit<32> size, bit<32> outputWidth);
+}
+
+enum CloneType {
+    I2E,
+    E2E
+}
+
+@deprecated("Please use verify_checksum/update_checksum instead.")
+extern Checksum16 {
+    Checksum16();
+    bit<16> get<D>(in D data);
+}
+
+/***
+ * Verifies the checksum of the supplied data.  If this method detects
+ * that a checksum of the data is not correct, then the value of the
+ * standard_metadata checksum_error field will be equal to 1 when the
+ * packet begins ingress processing.
+ *
+ * Calling verify_checksum is only supported in the VerifyChecksum
+ * control.
+ *
+ * @param T          Must be a tuple type where all the tuple elements
+ *                   are of type bit<W>, int<W>, or varbit<W>.  The
+ *                   total length of the fields must be a multiple of
+ *                   the output size.
+ * @param O          Checksum type; must be bit<X> type.
+ * @param condition  If 'false' the verification always succeeds.
+ * @param data       Data whose checksum is verified.
+ * @param checksum   Expected checksum of the data; note that it must
+ *                   be a left-value.
+ * @param algo       Algorithm to use for checksum (not all algorithms
+ *                   may be supported).  Must be a compile-time
+ *                   constant.
+ */
+extern void verify_checksum<T, O>(in bool condition, in T data, in O checksum, HashAlgorithm algo);
+
+/***
+ * Computes the checksum of the supplied data and writes it to the
+ * checksum parameter.
+ *
+ * Calling update_checksum is only supported in the ComputeChecksum
+ * control.
+ *
+ * @param T          Must be a tuple type where all the tuple elements
+ *                   are of type bit<W>, int<W>, or varbit<W>.  The
+ *                   total length of the fields must be a multiple of
+ *                   the output size.
+ * @param O          Output type; must be bit<X> type.
+ * @param condition  If 'false' the checksum parameter is not changed
+ * @param data       Data whose checksum is computed.
+ * @param checksum   Checksum of the data.
+ * @param algo       Algorithm to use for checksum (not all algorithms
+ *                   may be supported).  Must be a compile-time
+ *                   constant.
+ */
+@pure
+extern void update_checksum<T, O>(in bool condition, in T data, inout O checksum, HashAlgorithm algo);
+
+/***
+ * verify_checksum_with_payload is identical in all ways to
+ * verify_checksum, except that it includes the payload of the packet
+ * in the checksum calculation.  The payload is defined as "all bytes
+ * of the packet which were not parsed by the parser".
+ *
+ * Calling verify_checksum_with_payload is only supported in the
+ * VerifyChecksum control.
+ */
+extern void verify_checksum_with_payload<T, O>(in bool condition, in T data, in O checksum, HashAlgorithm algo);
+
+/**
+ * update_checksum_with_payload is identical in all ways to
+ * update_checksum, except that it includes the payload of the packet
+ * in the checksum calculation.  The payload is defined as "all bytes
+ * of the packet which were not parsed by the parser".
+ *
+ * Calling update_checksum_with_payload is only supported in the
+ * ComputeChecksum control.
+ */
+@noSideEffects
+extern void update_checksum_with_payload<T, O>(in bool condition, in T data, inout O checksum, HashAlgorithm algo);
+
+/***
+ * clone is in most ways identical to the clone_preserving_field_list
+ * operation, with the only difference being that it never preserves
+ * any user-defined metadata fields with the cloned packet.  It is
+ * equivalent to calling clone_preserving_field_list with the same
+ * type and session parameter values, with empty data.
+ */
+extern void clone(in CloneType type, in bit<32> session);
+
+@deprecated("Please use 'resubmit_preserving_field_list' instead")
+extern void resubmit<T>(in T data);
+/***
+ * Calling resubmit_preserving_field_list during execution of the
+ * ingress control will cause the packet to be resubmitted, i.e. it
+ * will begin processing again with the parser, with the contents of
+ * the packet exactly as they were when it last began parsing.  The
+ * only difference is in the value of the standard_metadata
+ * instance_type field, and any user-defined metadata fields that the
+ * resubmit_preserving_field_list operation causes to be preserved.
+ *
+ * The user metadata fields that are tagged with @field_list(index) will
+ * be sent to the parser together with the packet.
+ *
+ * Calling resubmit_preserving_field_list is only supported in the
+ * ingress control.  There is no way to undo its effects once it has
+ * been called.  If resubmit_preserving_field_list is called multiple
+ * times during a single execution of the ingress control, only one
+ * packet is resubmitted, and only the user-defined metadata fields
+ * specified by the field list index from the last such call are
+ * preserved.  See the v1model architecture documentation (Note 1) for
+ * more details.
+ *
+ * For example, the user metadata fields can be annotated as follows:
+ * struct UM {
+ *    @field_list(1)
+ *    bit<32> x;
+ *    @field_list(1, 2)
+ *    bit<32> y;
+ *    bit<32> z;
+ * }
+ *
+ * Calling resubmit_preserving_field_list(1) will resubmit the packet
+ * and preserve fields x and y of the user metadata.  Calling
+ * resubmit_preserving_field_list(2) will only preserve field y.
+ */
+extern void resubmit_preserving_field_list(bit<8> index);
+
+@deprecated("Please use 'recirculate_preserving_field_list' instead")
+extern void recirculate<T>(in T data);
+/***
+ * Calling recirculate_preserving_field_list during execution of the
+ * egress control will cause the packet to be recirculated, i.e. it
+ * will begin processing again with the parser, with the contents of
+ * the packet as they are created by the deparser.  Recirculated
+ * packets can be distinguished from new packets in ingress processing
+ * by the value of the standard_metadata instance_type field.  The
+ * caller may request that some user-defined metadata fields be
+ * preserved with the recirculated packet.
+ *
+ * The user metadata fields that are tagged with @field_list(index) will be
+ * sent to the parser together with the packet.
+ *
+ * Calling recirculate_preserving_field_list is only supported in the
+ * egress control.  There is no way to undo its effects once it has
+ * been called.  If recirculate_preserving_field_list is called
+ * multiple times during a single execution of the egress control,
+ * only one packet is recirculated, and only the user-defined metadata
+ * fields specified by the field list index from the last such call
+ * are preserved.  See the v1model architecture documentation (Note 1)
+ * for more details.
+ */
+extern void recirculate_preserving_field_list(bit<8> index);
+
+@deprecated("Please use 'clone_preserving_field_list' instead")
+extern void clone3<T>(in CloneType type, in bit<32> session, in T data);
+
+/***
+ * Calling clone_preserving_field_list during execution of the ingress
+ * or egress control will cause the packet to be cloned, sometimes
+ * also called mirroring, i.e. zero or more copies of the packet are
+ * made, and each will later begin egress processing as an independent
+ * packet from the original packet.  The original packet continues
+ * with its normal next steps independent of the clone(s).
+ *
+ * The session parameter is an integer identifying a clone session id
+ * (sometimes called a mirror session id).  The control plane software
+ * must configure each session you wish to use, or else no clones will
+ * be made using that session.  Typically this will involve the
+ * control plane software specifying one output port to which the
+ * cloned packet should be sent, or a list of (port, egress_rid) pairs
+ * to which a separate clone should be created for each, similar to
+ * multicast packets.
+ *
+ * Cloned packets can be distinguished from others by the value of the
+ * standard_metadata instance_type field.
+ *
+ * The user metadata fields that are tagged with @field_list(index) will be
+ * sent to the parser together with a clone of the packet.
+ *
+ * If clone_preserving_field_list is called during ingress processing,
+ * the first parameter must be CloneType.I2E.  If
+ * clone_preserving_field_list is called during egress processing, the
+ * first parameter must be CloneType.E2E.
+ *
+ * There is no way to undo its effects once it has been called.  If
+ * there are multiple calls to clone_preserving_field_list and/or
+ * clone during a single execution of the same ingress (or egress)
+ * control, only the last clone session and index are used.  See the
+ * v1model architecture documentation (Note 1) for more details.
+ */
+extern void clone_preserving_field_list(in CloneType type, in bit<32> session, bit<8> index);
+
+extern void truncate(in bit<32> length);
+
+/***
+ * Calling assert when the argument is true has no effect, except any
+ * effect that might occur due to evaluation of the argument (but see
+ * below).  If the argument is false, the precise behavior is
+ * target-specific, but the intent is to record or log which assert
+ * statement failed, and optionally other information about the
+ * failure.
+ *
+ * For example, on the simple_switch target, executing an assert
+ * statement with a false argument causes a log message with the file
+ * name and line number of the assert statement to be printed, and
+ * then the simple_switch process exits.
+ *
+ * If you provide the --ndebug command line option to p4c when
+ * compiling, the compiled program behaves as if all assert statements
+ * were not present in the source code.
+ *
+ * We strongly recommend that you avoid using expressions as an
+ * argument to an assert call that can have side effects, e.g. an
+ * extern method or function call that has side effects.  p4c will
+ * allow you to do this with no warning given.  We recommend this
+ * because, if you follow this advice, your program will behave the
+ * same way when assert statements are removed.
+ */
+extern void assert(in bool check);
+
+/***
+ * For the purposes of compiling and executing P4 programs on a target
+ * device, assert and assume are identical, including the use of the
+ * --ndebug p4c option to elide them.  See documentation for assert.
+ *
+ * The reason that assume exists as a separate function from assert is
+ * because they are expected to be used differently by formal
+ * verification tools.  For some formal tools, the goal is to try to
+ * find example packets and sets of installed table entries that cause
+ * an assert statement condition to be false.
+ *
+ * Suppose you run such a tool on your program, and the example packet
+ * given is an MPLS packet, i.e. hdr.ethernet.etherType == 0x8847.
+ * You look at the example, and indeed it does cause an assert
+ * condition to be false.  However, your plan is to deploy your P4
+ * program in a network in places where no MPLS packets can occur.
+ * You could add extra conditions to your P4 program to handle the
+ * processing of such a packet cleanly, without assertions failing,
+ * but you would prefer to tell the tool "such example packets are not
+ * applicable in my scenario -- never show them to me".  By adding a
+ * statement:
+ *
+ *     assume(hdr.ethernet.etherType != 0x8847);
+ *
+ * at an appropriate place in your program, the formal tool should
+ * never show you such examples -- only ones that make all such assume
+ * conditions true.
+ *
+ * The reason that assume statements behave the same as assert
+ * statements when compiled to a target device is that if the
+ * condition ever evaluates to false when operating in a network, it
+ * is likely that your assumption was wrong, and should be reexamined.
+ */
+extern void assume(in bool check);
+
+/*
+ * Log user defined messages
+ * Example: log_msg("User defined message");
+ * or log_msg("Value1 = {}, Value2 = {}",{value1, value2});
+ */
+extern void log_msg(string msg);
+extern void log_msg<T>(string msg, in T data);
+
+// The name 'standard_metadata' is reserved
+
+/*
+ * Architecture.
+ *
+ * M must be a struct.
+ *
+ * H must be a struct where every one if its members is of type
+ * header, header stack, or header_union.
+ */
+
+parser Parser<H, M>(packet_in b,
+                    out H parsedHdr,
+                    inout M meta,
+                    inout standard_metadata_t standard_metadata);
+
+/*
+ * The only legal statements in the body of the VerifyChecksum control
+ * are: block statements, calls to the verify_checksum and
+ * verify_checksum_with_payload methods, and return statements.
+ */
+control VerifyChecksum<H, M>(inout H hdr,
+                             inout M meta);
+@pipeline
+control Ingress<H, M>(inout H hdr,
+                      inout M meta,
+                      inout standard_metadata_t standard_metadata);
+@pipeline
+control Egress<H, M>(inout H hdr,
+                     inout M meta,
+                     inout standard_metadata_t standard_metadata);
+
+/*
+ * The only legal statements in the body of the ComputeChecksum
+ * control are: block statements, calls to the update_checksum and
+ * update_checksum_with_payload methods, and return statements.
+ */
+control ComputeChecksum<H, M>(inout H hdr,
+                              inout M meta);
+
+/*
+ * The only legal statements in the body of the Deparser control are:
+ * calls to the packet_out.emit() method.
+ */
+@deparser
+control Deparser<H>(packet_out b, in H hdr);
+
+package V1Switch<H, M>(Parser<H, M> p,
+                       VerifyChecksum<H, M> vr,
+                       Ingress<H, M> ig,
+                       Egress<H, M> eg,
+                       ComputeChecksum<H, M> ck,
+                       Deparser<H> dep
+                       );
+# 3 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+
+
+
+# 1 "IITP/NativeUP4/p4src/include/headers.p4" 1
+
+
+
+# 1 "IITP/NativeUP4/p4src/include/define.p4" 1
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2020-present Open Networking Foundation <info@opennetworking.org>
+ */
+
+
+
+
+// CPU_PORT specifies the P4 port number associated to controller packet-in and
+// packet-out.
+
+
+// CPU_CLONE_SESSION_ID specifies the mirroring session for packets to be cloned
+// to the CPU port. For cloning to work, the P4Runtime client needs first to
+// insert a CloneSessionEntry that maps this session ID to the CPU_PORT.
+
+
+// Table sizes to be tuned for hardware
+
+
+
+
+
+
+// Some sizes
+# 36 "IITP/NativeUP4/p4src/include/define.p4"
+// Some field values that would be excessive as enums
+const bit<4> IP_VERSION_4 = 4;
+const bit<8> DEFAULT_IPV4_TTL = 64;
+
+typedef bit<48> mac_addr_t;
+typedef bit<32> ipv4_addr_t;
+typedef bit<16> l4_port_t;
+typedef bit<8> ip_proto_t;
+typedef bit<16> eth_type_t;
+
+const bit<16> UDP_PORT_GTPU = 2152;
+const bit<3> GTP_V1 = 0x1;
+const bit<1> GTP_PROTOCOL_TYPE_GTP = 0x1;
+const bit<8> GTP_MESSAGE_TYPE_UPDU = 0xff;
+const bit<8> GTPU_NEXT_EXT_NONE = 0x0;
+const bit<8> GTPU_NEXT_EXT_PSC = 0x85;
+const bit<4> GTPU_EXT_PSC_TYPE_DL = 4w0; // Downlink
+const bit<4> GTPU_EXT_PSC_TYPE_UL = 4w1; // Uplink
+const bit<8> GTPU_EXT_PSC_LEN = 8w1; // 1*4-octets
+
+typedef bit<32> teid_t;
+typedef bit<6> qfi_t;
+typedef bit<32> counter_index_t;
+typedef bit<8> tunnel_peer_id_t;
+typedef bit<32> app_meter_idx_t;
+typedef bit<32> session_meter_idx_t;
+typedef bit<6> slice_tc_meter_idx_t;
+
+typedef bit<4> slice_id_t;
+typedef bit<2> tc_t; // Traffic Class (for QoS) within a slice
+
+const qfi_t DEFAULT_QFI = 0;
+
+// Signal that NO application ID has been set
+const bit<8> APP_ID_UNKNOWN = 0;
+
+const session_meter_idx_t DEFAULT_SESSION_METER_IDX = 0;
+const app_meter_idx_t DEFAULT_APP_METER_IDX = 0;
+
+//------------------------------------------------------------------------------
+// ENUMS
+// These should be exposed to the control plane by P4Runtime.
+//------------------------------------------------------------------------------
+
+enum bit<8> GTPUMessageType {
+    GPDU = 255
+}
+
+enum bit<16> EtherType {
+    IPV4 = 0x0800,
+    IPV6 = 0x86dd // unused
+}
+
+enum bit<8> IpProtocol {
+    ICMP = 1,
+    TCP = 6,
+    UDP = 17,
+    P4ML = 100
+}
+
+enum bit<16> L4Port {
+    DHCP_SERV = 67, // naming this DHCP_SERVER causes a syntax error..
+    DHCP_CLIENT = 68,
+    GTP_GPDU = 2152,
+    IPV4_IN_UDP = 9875 // placeholder. port has not yet been assigned by IANA
+}
+
+enum bit<8> Direction {
+    UNKNOWN = 0x0,
+    UPLINK = 0x1,
+    DOWNLINK = 0x2,
+    OTHER = 0x3
+};
+
+enum bit<8> InterfaceType {
+    UNKNOWN = 0x0,
+    ACCESS = 0x1,
+    CORE = 0x2
+}
+
+enum bit<4> Slice {
+    DEFAULT = 0x0
+}
+
+enum bit<2> TrafficClass {
+    BEST_EFFORT = 0,
+    CONTROL = 1,
+    REAL_TIME = 2,
+    ELASTIC = 3
+}
+
+enum bit<2> MeterColor {
+    GREEN = 0,
+    YELLOW = 1,
+    RED = 2
+}
+
+enum bit<32> Modify_HDR {
+    UNKNOWN = 0x0
+};
+# 5 "IITP/NativeUP4/p4src/include/headers.p4" 2
+
+
+
+// typedef bit<32> ipv4_addr_t;
+// typedef bit<48> mac_addr_t;
+typedef bit<8> ip_protocol_t;
+
+//------------------------------------------------------------------------------
+// COMMON HEADER DEFINITIONS
+//------------------------------------------------------------------------------
+
+header ethernet_t {
+    mac_addr_t dstAddr;
+    mac_addr_t srcAddr;
+    bit<16> etherType;
+}
+
+header ipv4_t {
+    bit<4> version;
+    bit<4> ihl;
+    bit<6> dscp;
+    bit<2> ecn;
+    bit<16> totalLen;
+    bit<16> identification;
+    bit<3> flags;
+    bit<13> fragOffset;
+    bit<8> ttl;
+    ip_protocol_t protocol;
+    bit<16> hdr_checksum;
+    ipv4_addr_t srcAddr;
+    ipv4_addr_t dstAddr;
+}
+
+header udp_t {
+    bit<16> srcPort;
+    bit<16> dstPort;
+    bit<16> length_;
+    bit<16> checksum;
+}
+
+//------------------------------------------------------------------------------
+// CEINA HEADER DEFINITIONS
+//------------------------------------------------------------------------------
+
+header p4ml_t { // 10B or 11B (CEINA)
+    bit<32> bitmap;
+    bit<8> agtr_time;
+    bit<1> overflow;
+    bit<2> PSIndex;
+    bit<1> dataIndex;
+    bit<1> ECN;
+    bit<1> isResend;
+    bit<1> isWCollision;
+    bit<1> isACK;
+    bit<32> appIDandSeqNum;
+    bit<6> padding;
+    bit<2> quantization_level; // 1 if 1bit, 2 if 32bit
+}
+
+
+
+header p4ml_agtr_index_t {
+    bit<16> agtr;
+}
+
+
+header bg_p4ml_t {
+    bit<64> key;
+    bit<32> len_tensor;
+    bit<32> bitmap;
+    bit<8> agtr_time;
+    bit<4> reserved;
+    bit<1> ECN;
+    bit<1> isResend;
+    bit<1> isSWCollision;
+    bit<1> isACK;
+    bit<16> agtr;
+    bit<32> appIDandSeqNum;
+}
+
+header entry_t {
+    bit<32> data0 ;
+    bit<32> data1 ;
+    bit<32> data2 ;
+    bit<32> data3 ;
+    bit<32> data4 ;
+    bit<32> data5 ;
+    bit<32> data6 ;
+    bit<32> data7 ;
+    bit<32> data8 ;
+    bit<32> data9 ;
+    bit<32> data10;
+    bit<32> data11;
+    bit<32> data12;
+    bit<32> data13;
+    bit<32> data14;
+    bit<32> data15;
+    bit<32> data16;
+    bit<32> data17;
+    bit<32> data18;
+    bit<32> data19;
+    bit<32> data20;
+    bit<32> data21;
+    bit<32> data22;
+    bit<32> data23;
+    bit<32> data24;
+    bit<32> data25;
+    bit<32> data26;
+    bit<32> data27;
+    bit<32> data28;
+    bit<32> data29;
+    bit<32> data30;
+    bit<32> data31;
+}
+
+
+header p4ml_meta_t { // 
+    bit<32> bitmap ; // 4B
+    bit<16> isMyAppIDandMyCurrentSeq ; // 2B
+    bit<32> isAggregate ; // 4B // 10
+    bit<8> agtr_time ; // 1B 
+    bit<32> integrated_bitmap ; // 4B
+    bit<8> current_agtr_time ; // 1B 
+    bit<32> agtr_index ; // 4B // 20
+    bit<32> isDrop ; // 4B
+    bit<1> inside_appID_and_Seq ; //   
+    bit<1> value_one ; //  
+    bit<1> preemption ; // 1B ///
+    bit<5> padding ; // 1B
+    bit<8> agtr_complete ; // 1B // 26B
+    bit<16> qdepth ; // 2B  
+    bit<8> seen_bitmap0 ; // 1B
+    bit<8> seen_isAggregate ; // 1B
+    bit<32> is_ecn ; // 4B // 34B
+    bit<8> isAlreadyCleared ;
+
+}
+
+header p4ml_constant_t {
+    bit<32> bitmap;
+    bit<8> agtr_time;
+}
+
+header entry_1bit_t {
+    bit<8> data0_1bit;
+    bit<8> data1_1bit;
+    bit<8> data2_1bit;
+    bit<8> data3_1bit;
+    bit<8> data4_1bit;
+    bit<8> data5_1bit;
+    bit<8> data6_1bit;
+    bit<8> data7_1bit;
+    bit<8> data8_1bit;
+    bit<8> data9_1bit;
+    bit<8> data10_1bit;
+    bit<8> data11_1bit;
+    bit<8> data12_1bit;
+    bit<8> data13_1bit;
+    bit<8> data14_1bit;
+    bit<8> data15_1bit;
+    bit<8> data16_1bit;
+    bit<8> data17_1bit;
+    bit<8> data18_1bit;
+    bit<8> data19_1bit;
+    bit<8> data20_1bit;
+    bit<8> data21_1bit;
+    bit<8> data22_1bit;
+    bit<8> data23_1bit;
+    bit<8> data24_1bit;
+    bit<8> data25_1bit;
+    bit<8> data26_1bit;
+    bit<8> data27_1bit;
+    bit<8> data28_1bit;
+    bit<8> data29_1bit;
+    bit<8> data30_1bit;
+    bit<8> data31_1bit;
+}
+
+
+//------------------------------------------------------------------------------
+// UP4 HEADER DEFINITIONS
+//------------------------------------------------------------------------------
+
+header tcp_t {
+    l4_port_t sport;
+    l4_port_t dport;
+    bit<32> seq_no;
+    bit<32> ack_no;
+    bit<4> data_offset;
+    bit<3> res;
+    bit<3> ecn;
+    bit<6> ctrl;
+    bit<16> window;
+    bit<16> checksum;
+    bit<16> urgent_ptr;
+}
+
+header icmp_t {
+    bit<8> icmp_type;
+    bit<8> icmp_code;
+    bit<16> checksum;
+    bit<16> identifier;
+    bit<16> sequence_number;
+    bit<64> timestamp;
+}
+
+header gtpu_t {
+    bit<3> version; /* version */
+    bit<1> pt; /* protocol type */
+    bit<1> spare; /* reserved */
+    bit<1> ex_flag; /* next extension hdr present? */
+    bit<1> seq_flag; /* sequence no. */
+    bit<1> npdu_flag; /* n-pdn number present ? */
+    bit<8> msgtype; /* message type */
+    bit<16> msglen; /* message length */
+    teid_t teid; /* tunnel endpoint id */
+}
+
+// Follows gtpu_t if any of ex_flag, seq_flag, or npdu_flag is 1.
+header gtpu_options_t {
+    bit<16> seq_num; /* Sequence number */
+    bit<8> n_pdu_num; /* N-PDU number */
+    bit<8> next_ext; /* Next extension header */
+}
+
+// GTPU extension: PDU Session Container (PSC) -- 3GPP TS 38.415 version 15.2.0
+// https://www.etsi.org/deliver/etsi_ts/138400_138499/138415/15.02.00_60/ts_138415v150200p.pdf
+header gtpu_ext_psc_t {
+    bit<8> len; /* Length in 4-octet units (common to all extensions) */
+    bit<4> type; /* Uplink or downlink */
+    bit<4> spare0; /* Reserved */
+    bit<1> ppp; /* Paging Policy Presence (UL only, not supported) */
+    bit<1> rqi; /* Reflective QoS Indicator (UL only) */
+    bit<6> qfi; /* QoS Flow Identifier */
+    bit<8> next_ext;
+}
+
+@controller_header("packet_out")
+header packet_out_t {
+    bit<8> reserved; // Not used
+}
+
+@controller_header("packet_in")
+header packet_in_t {
+    bit<32> ingress_port;
+    bit<7> _pad;
+}
+
+//------------------------------------------------------------------------------
+// HEADER STRUCTURE
+//------------------------------------------------------------------------------
+
+struct header_t {
+    ethernet_t ethernet;
+    ipv4_t ipv4; // for mobile network
+    udp_t udp;
+    //--------------------------------------------------------------------------
+    // for up4
+    //--------------------------------------------------------------------------
+    tcp_t tcp;
+    icmp_t icmp;
+    gtpu_t gtpu;
+    gtpu_options_t gtpu_options;
+    gtpu_ext_psc_t gtpu_ext_psc;
+    ipv4_t inner_ipv4;
+    udp_t inner_udp;
+    tcp_t inner_tcp;
+    icmp_t inner_icmp;
+    //--------------------------------------------------------------------------
+    // for up4
+    //--------------------------------------------------------------------------
+    p4ml_t p4ml; // 10B                       
+    p4ml_agtr_index_t p4ml_agtr_index_useless2; // 2B
+    p4ml_agtr_index_t p4ml_agtr_index; // 2B
+    p4ml_agtr_index_t p4ml_agtr_index_useless; // 2B
+    entry_t p4ml_entries_useless; // 128B
+    entry_t p4ml_entries; // 128B
+
+}
+
+//------------------------------------------------------------------------------
+// CEINA METADATA DEFINITIONS
+//------------------------------------------------------------------------------
+
+header value_pair_t{
+    bit<32> quantization_level;
+    bit<32> appID_and_Seq;
+}
+
+//------------------------------------------------------------------------------
+// UP4 METADATA DEFINITIONS
+//------------------------------------------------------------------------------
+
+struct ddn_digest_t {
+    ipv4_addr_t ue_address;
+}
+
+//------------------------------------------------------------------------------
+// TOTAL METADATA DEFINITIONS
+//------------------------------------------------------------------------------
+
+struct metadata_t{
+
+    //------------------------------------------------------------------------------
+    // CEINA METADATA DEFINITIONS
+    //------------------------------------------------------------------------------
+
+    p4ml_meta_t mdata;
+    value_pair_t value_pair;
+
+    //------------------------------------------------------------------------------
+    // UP4 METADATA DEFINITIONS
+    //------------------------------------------------------------------------------
+
+    Direction direction;
+
+    teid_t teid;
+
+    slice_id_t slice_id;
+    tc_t tc;
+
+    ipv4_addr_t next_hop_ip;
+
+    ipv4_addr_t ue_addr;
+    ipv4_addr_t inet_addr;
+    l4_port_t ue_l4_port;
+    l4_port_t inet_l4_port;
+
+    l4_port_t l4_sport;
+    l4_port_t l4_dport;
+
+    ip_proto_t ip_proto;
+
+    bit<8> application_id;
+
+    bit<8> src_iface;
+    bool needs_gtpu_decap;
+    bool needs_tunneling;
+    bool needs_buffering;
+    bool needs_dropping;
+    bool terminations_hit;
+
+    counter_index_t ctr_idx;
+
+    tunnel_peer_id_t tunnel_peer_id;
+
+    // GTP tunnel out parameters
+    ipv4_addr_t tunnel_out_src_ipv4_addr;
+    ipv4_addr_t tunnel_out_dst_ipv4_addr;
+    l4_port_t tunnel_out_udp_sport;
+    teid_t tunnel_out_teid;
+    qfi_t tunnel_out_qfi;
+
+    session_meter_idx_t session_meter_idx_internal;
+    app_meter_idx_t app_meter_idx_internal;
+    MeterColor session_color;
+    MeterColor app_color;
+    MeterColor slice_tc_color;
+
+    @field_list(0)
+    bit<32> preserved_ingress_port;
+}
+# 7 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/parser.p4" 1
+
+
+
+# 1 "IITP/NativeUP4/p4src/include/headers.p4" 1
+# 5 "IITP/NativeUP4/p4src/include/parser.p4" 2
+
+
+
+
+
+parser NativeUP4Parser(
+    packet_in pkt,
+    out header_t hdr,
+    inout metadata_t md,
+    inout standard_metadata_t standard_metadata) {
+
+    state start {
+            //transition select(standard_metadata.ingress_port)
+            // CPU_PORT: parse_packet_out;
+            transition parse_ethernet;
+    }
+
+    // state parse_packet_out {
+    //     pkt.extract(hdr.packet_out);
+    //     transition parse_ethernet;
+    // }
+
+    state parse_ethernet {
+        pkt.extract(hdr.ethernet);
+        transition select(hdr.ethernet.etherType) {
+            0x0800 : parse_ipv4;
+            default : accept;
+        }
+    }
+
+    state parse_ipv4 {
+        pkt.extract(hdr.ipv4);
+        transition select(hdr.ipv4.protocol) {
+            IpProtocol.UDP: parse_udp;
+            IpProtocol.TCP: parse_tcp;
+            IpProtocol.ICMP: parse_icmp;
+            IpProtocol.P4ML: parse_p4ml;
+            default: accept;
+        }
+    }
+
+        state parse_udp {
+        pkt.extract(hdr.udp);
+        // note: this eventually wont work
+        md.l4_sport = hdr.udp.srcPort;
+        md.l4_dport = hdr.udp.dstPort;
+        gtpu_t gtpu = pkt.lookahead<gtpu_t>();
+        transition select(hdr.udp.dstPort, gtpu.version, gtpu.msgtype) {
+            (L4Port.IPV4_IN_UDP, _, _): parse_inner_ipv4;
+            // Treat GTP control traffic as payload.
+            (L4Port.GTP_GPDU, GTP_V1, GTPUMessageType.GPDU): parse_gtpu;
+            default: accept;
+        }
+    }
+
+    state parse_tcp {
+        pkt.extract(hdr.tcp);
+        md.l4_sport = hdr.tcp.sport;
+        md.l4_dport = hdr.tcp.dport;
+        transition accept;
+    }
+
+    state parse_icmp {
+        pkt.extract(hdr.icmp);
+        transition accept;
+    }
+
+    state parse_gtpu {
+        pkt.extract(hdr.gtpu);
+        md.teid = hdr.gtpu.teid;
+        transition select(hdr.gtpu.ex_flag, hdr.gtpu.seq_flag, hdr.gtpu.npdu_flag) {
+            (0, 0, 0): parse_inner_ipv4;
+            default: parse_gtpu_options;
+        }
+    }
+
+    state parse_gtpu_options {
+        pkt.extract(hdr.gtpu_options);
+        bit<8> gtpu_ext_len = pkt.lookahead<bit<8>>();
+        transition select(hdr.gtpu_options.next_ext, gtpu_ext_len) {
+            (GTPU_NEXT_EXT_PSC, GTPU_EXT_PSC_LEN): parse_gtpu_ext_psc;
+            default: accept;
+        }
+    }
+
+    state parse_gtpu_ext_psc {
+        pkt.extract(hdr.gtpu_ext_psc);
+        transition select(hdr.gtpu_ext_psc.next_ext) {
+            GTPU_NEXT_EXT_NONE: parse_inner_ipv4;
+            default: accept;
+        }
+    }
+
+    //-----------------
+    // Inner packet: real dst,src addr
+    //-----------------
+
+    state parse_inner_ipv4 {
+        pkt.extract(hdr.inner_ipv4);
+        transition select(hdr.inner_ipv4.protocol) {
+            IpProtocol.UDP: parse_inner_udp;
+            IpProtocol.TCP: parse_inner_tcp;
+            IpProtocol.ICMP: parse_inner_icmp;
+            IpProtocol.P4ML: parse_p4ml;
+            default: accept;
+        }
+    }
+
+    state parse_inner_udp {
+        pkt.extract(hdr.inner_udp);
+        md.l4_sport = hdr.inner_udp.srcPort;
+        md.l4_dport = hdr.inner_udp.dstPort;
+        transition accept;
+    }
+
+    state parse_inner_tcp {
+        pkt.extract(hdr.inner_tcp);
+        md.l4_sport = hdr.inner_tcp.sport;
+        md.l4_dport = hdr.inner_tcp.dport;
+        transition accept;
+    }
+
+    state parse_inner_icmp {
+        pkt.extract(hdr.inner_icmp);
+        transition accept;
+    }
+
+
+    state parse_p4ml {
+        pkt.extract(hdr.p4ml);
+        transition select(hdr.p4ml.dataIndex) {
+            0x0 : use_first_p4ml_agtr_index_recirculate;
+            0x1 : use_second_p4ml_agtr_index_recirculate;
+            default : accept;
+        }
+    }
+
+
+    state parse_entry {
+        pkt.extract(hdr.p4ml_entries);
+        md.mdata.setValid(); ///
+        transition accept;
+    }
+
+// Recirculation 1
+    state use_first_p4ml_agtr_index_recirculate {
+        pkt.extract(hdr.p4ml_agtr_index);
+        // [I]
+        transition useless_second_p4ml_agtr_index_recirculate;
+    }
+
+
+    state useless_second_p4ml_agtr_index_recirculate {
+        pkt.extract(hdr.p4ml_agtr_index_useless);
+        transition parse_entry;
+    } // [I][I_useless][E]
+
+// Recirculation 2
+    state use_second_p4ml_agtr_index_recirculate {
+        pkt.extract(hdr.p4ml_agtr_index_useless2);
+        transition parse_p4ml_agtr_index_recirculate;
+    } // [I_useless2]
+
+    state parse_p4ml_agtr_index_recirculate {
+        pkt.extract(hdr.p4ml_agtr_index);
+        transition select(hdr.p4ml.quantization_level){
+          0x2 : parse_entry2; // [I_useless2][I][(128B)E_useless][(128B)E]
+    //       0x1   : parse_entry2_1bit;  // [I_useless2][I][(32B)E_useless ][(128B)E]
+          default : accept;
+        }
+    } // [I_useless2][I]
+
+    state parse_entry2 {
+        pkt.extract(hdr.p4ml_entries_useless);
+        transition parse_entry;
+    } // [I_useless2][I][(128B)E_useless][(128B)E]
+
+    // state parse_entry2_1bit {
+    //     pkt.extract(hdr.p4ml_entries_1bit_useless2); 
+    //     transition parse_entry; 
+    // }   // [I_useless2][I][(32B)E_useless ][(128B)E]
+
+    } //parser
+
+control NativeUP4Deparser(packet_out pkt, in header_t hdr) {
+        apply{
+            pkt.emit(hdr);
+
+        }
+}
+
+
+
+// control DeparserImpl(packet_out pkt, in header_t hdr) {
+//         apply{
+//             pkt.emit(hdr.packet_in);
+//             pkt.emit(hdr.ethernet);
+//             pkt.emit(hdr.ipv4);
+//             pkt.emit(hdr.udp);
+//             pkt.emit(hdr.tcp);
+//             pkt.emit(hdr.icmp);
+//             pkt.emit(hdr.gtpu);
+//             pkt.emit(hdr.gtpu_options);
+//             pkt.emit(hdr.gtpu_ext_psc);
+//             pkt.emit(hdr.inner_ipv4);
+//             pkt.emit(hdr.inner_udp);
+//             pkt.emit(hdr.inner_tcp);
+//             pkt.emit(hdr.inner_icmp);
+//             pkt.emit(hdr.p4ml);
+//             pkt.emit(hdr.p4ml_entries);
+//             pkt.emit(hdr.p4ml_agtr_index);
+//             pkt.emit(hdr.p4ml_agtr_index_useless);
+//             pkt.emit(hdr.p4ml_agtr_index_useless2);
+//             pkt.emit(hdr.p4ml_agtr_index);
+// 
+//         }
+// }
+# 8 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/define.p4" 1
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2020-present Open Networking Foundation <info@opennetworking.org>
+ */
+# 9 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/checksum.p4" 1
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2020-present Open Networking Foundation <info@opennetworking.org>
+ */
+
+
+
+
+# 1 "IITP/NativeUP4/p4src/include/define.p4" 1
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2020-present Open Networking Foundation <info@opennetworking.org>
+ */
+# 10 "IITP/NativeUP4/p4src/include/checksum.p4" 2
+
+
+//------------------------------------------------------------------------------
+// PRE-INGRESS CHECKSUM VERIFICATION
+//------------------------------------------------------------------------------
+control VerifyChecksumImpl(inout header_t hdr,
+                           inout metadata_t meta)
+{
+    apply {
+        verify_checksum(hdr.ipv4.isValid(),
+            {
+                hdr.ipv4.version,
+                hdr.ipv4.ihl,
+                hdr.ipv4.dscp,
+                hdr.ipv4.ecn,
+                hdr.ipv4.totalLen,
+                hdr.ipv4.identification,
+                hdr.ipv4.flags,
+                hdr.ipv4.fragOffset,
+                hdr.ipv4.ttl,
+                hdr.ipv4.protocol,
+                hdr.ipv4.srcAddr,
+                hdr.ipv4.dstAddr
+            },
+            hdr.ipv4.hdr_checksum,
+            HashAlgorithm.csum16
+        );
+        verify_checksum(hdr.inner_ipv4.isValid(),
+            {
+                hdr.inner_ipv4.version,
+                hdr.inner_ipv4.ihl,
+                hdr.inner_ipv4.dscp,
+                hdr.inner_ipv4.ecn,
+                hdr.inner_ipv4.totalLen,
+                hdr.inner_ipv4.identification,
+                hdr.inner_ipv4.flags,
+                hdr.inner_ipv4.fragOffset,
+                hdr.inner_ipv4.ttl,
+                hdr.inner_ipv4.protocol,
+                hdr.inner_ipv4.srcAddr,
+                hdr.inner_ipv4.dstAddr
+            },
+            hdr.inner_ipv4.hdr_checksum,
+            HashAlgorithm.csum16
+        );
+        // TODO: add checksum verification for gtpu (if possible), inner_udp, inner_tcp
+    }
+}
+
+//------------------------------------------------------------------------------
+// CHECKSUM COMPUTATION
+//------------------------------------------------------------------------------
+control ComputeChecksumImpl(inout header_t hdr,
+                            inout metadata_t local_meta)
+{
+    apply {
+        // Compute Outer IPv4 checksum
+        update_checksum(hdr.ipv4.isValid(),{
+                hdr.ipv4.version,
+                hdr.ipv4.ihl,
+                hdr.ipv4.dscp,
+                hdr.ipv4.ecn,
+                hdr.ipv4.totalLen,
+                hdr.ipv4.identification,
+                hdr.ipv4.flags,
+                hdr.ipv4.fragOffset,
+                hdr.ipv4.ttl,
+                hdr.ipv4.protocol,
+                hdr.ipv4.srcAddr,
+                hdr.ipv4.dstAddr
+            },
+            hdr.ipv4.hdr_checksum,
+            HashAlgorithm.csum16
+        );
+
+        // Outer UDP checksum currently remains 0,
+        // which is legal for IPv4
+
+        // Compute IPv4 checksum
+        update_checksum(hdr.inner_ipv4.isValid(),{
+                hdr.inner_ipv4.version,
+                hdr.inner_ipv4.ihl,
+                hdr.inner_ipv4.dscp,
+                hdr.inner_ipv4.ecn,
+                hdr.inner_ipv4.totalLen,
+                hdr.inner_ipv4.identification,
+                hdr.inner_ipv4.flags,
+                hdr.inner_ipv4.fragOffset,
+                hdr.inner_ipv4.ttl,
+                hdr.inner_ipv4.protocol,
+                hdr.inner_ipv4.srcAddr,
+                hdr.inner_ipv4.dstAddr
+            },
+            hdr.inner_ipv4.hdr_checksum,
+            HashAlgorithm.csum16
+        );
+    }
+}
+# 10 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+
+//------------------------------------------------------------------------------
+// ROUTING BLOCK
+//------------------------------------------------------------------------------
+control Routing(inout header_t hdr,
+                inout metadata_t md,
+                inout standard_metadata_t standard_metadata) {
+    action drop() {
+        mark_to_drop(standard_metadata);
+    }
+
+    action route(mac_addr_t src_mac,
+                 mac_addr_t dst_mac,
+                 bit<32> egress_port) {
+        standard_metadata.egress_spec = (bit<9>)egress_port;
+        hdr.ethernet.srcAddr = src_mac;
+        hdr.ethernet.dstAddr = dst_mac;
+    }
+
+    table routes_v4 {
+        key = {
+            hdr.ipv4.dstAddr : lpm @name("dst_prefix");
+            hdr.ipv4.srcAddr : selector;
+            hdr.ipv4.protocol : selector;
+            md.l4_sport : selector;
+            md.l4_dport : selector;
+        }
+        actions = {
+            route;
+        }
+        @name("hashed_selector")
+        implementation = action_selector(HashAlgorithm.crc16, 32w1024, 32w16);
+        size = 1024;
+    }
+
+    apply {
+        // Normalize IP address for routing table, and decrement TTL
+        // TODO: find a better alternative to this hack
+        hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
+        if (hdr.ipv4.ttl == 0) {
+            drop();
+        }
+        else {
+            routes_v4.apply();
+        }
+    }
+}
+
+
+control NativeUP4Ingress(
+    inout header_t hdr,
+    inout metadata_t md,
+    inout standard_metadata_t standard_metadata) {
+
+//------------------------------------------------------------------------------
+// INA BLOCK
+//------------------------------------------------------------------------------
+
+    bit<32> CheckForAppIDandSeq;
+    bit<32> Check_for_resend;
+    bit<32> Check_for_check;
+    bit<32> Check_for_appID_and_Seq;
+    bit<32> Check_for_aggregate;
+    bit<32> Check_value;
+    bit<32> index_for_register = (bit<32>)hdr.p4ml_agtr_index.agtr;
+    bit<32> index_for_current_agtr_time = (bit<32>)md.mdata.current_agtr_time;
+    bit<8> quantization_level_const;
+
+
+
+# 1 "IITP/NativeUP4/p4src/include/registers.p4" 1
+
+
+
+
+
+register<bit<32>>(1) loss_counter;
+register<bit<32>>(40000) bitmap;
+register<bit<32>>(40000) appID_and_Seq;
+register<bit<32>>(40000) appID_and_Seq_pair;
+register<bit<8>>(40000) quantization_level;
+register<bit<32>>(40000) agtr_time;
+register<bit<32>>(40000) ecn_register;
+register<bit<32>>(40000) register1;
+register<bit<32>>(40000) register2;
+register<bit<32>>(40000) register3;
+register<bit<32>>(40000) register4;
+register<bit<32>>(40000) register5;
+register<bit<32>>(40000) register6;
+register<bit<32>>(40000) register7;
+register<bit<32>>(40000) register8;
+register<bit<32>>(40000) register9;
+register<bit<32>>(40000) register10;
+register<bit<32>>(40000) register11;
+register<bit<32>>(40000) register12;
+register<bit<32>>(40000) register13;
+register<bit<32>>(40000) register14;
+register<bit<32>>(40000) register15;
+register<bit<32>>(40000) register16;
+register<bit<32>>(40000) register17;
+register<bit<32>>(40000) register18;
+register<bit<32>>(40000) register19;
+register<bit<32>>(40000) register20;
+register<bit<32>>(40000) register21;
+register<bit<32>>(40000) register22;
+register<bit<32>>(40000) register23;
+register<bit<32>>(40000) register24;
+register<bit<32>>(40000) register25;
+register<bit<32>>(40000) register26;
+register<bit<32>>(40000) register27;
+register<bit<32>>(40000) register28;
+register<bit<32>>(40000) register29;
+register<bit<32>>(40000) register30;
+register<bit<32>>(40000) register31;
+register<bit<32>>(40000) register32;
+# 81 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/actions.p4" 1
+# 49 "IITP/NativeUP4/p4src/include/actions.p4"
+action processentry1() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register1.write(tmp_for_register, hdr.p4ml_entries.data0); }
+action processentry2() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register2.write(tmp_for_register, hdr.p4ml_entries.data1); }
+action processentry3() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register3.write(tmp_for_register, hdr.p4ml_entries.data2); }
+action processentry4() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register4.write(tmp_for_register, hdr.p4ml_entries.data3); }
+action processentry5() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register5.write(tmp_for_register, hdr.p4ml_entries.data4); }
+action processentry6() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register6.write(tmp_for_register, hdr.p4ml_entries.data5); }
+action processentry7() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register7.write(tmp_for_register, hdr.p4ml_entries.data6); }
+action processentry8() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register8.write(tmp_for_register, hdr.p4ml_entries.data7); }
+action processentry9() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register9.write(tmp_for_register, hdr.p4ml_entries.data8); }
+action processentry10() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register10.write(tmp_for_register, hdr.p4ml_entries.data9); }
+action processentry11() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register11.write(tmp_for_register, hdr.p4ml_entries.data10); }
+action processentry12() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register12.write(tmp_for_register, hdr.p4ml_entries.data11); }
+action processentry13() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register13.write(tmp_for_register, hdr.p4ml_entries.data12); }
+action processentry14() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register14.write(tmp_for_register, hdr.p4ml_entries.data13); }
+action processentry15() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register15.write(tmp_for_register, hdr.p4ml_entries.data14); }
+action processentry16() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register16.write(tmp_for_register, hdr.p4ml_entries.data15); }
+action processentry17() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register17.write(tmp_for_register, hdr.p4ml_entries.data16); }
+action processentry18() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register18.write(tmp_for_register, hdr.p4ml_entries.data17); }
+action processentry19() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register19.write(tmp_for_register, hdr.p4ml_entries.data18); }
+action processentry20() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register20.write(tmp_for_register, hdr.p4ml_entries.data19); }
+action processentry21() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register21.write(tmp_for_register, hdr.p4ml_entries.data20); }
+action processentry22() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register22.write(tmp_for_register, hdr.p4ml_entries.data21); }
+action processentry23() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register23.write(tmp_for_register, hdr.p4ml_entries.data22); }
+action processentry24() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register24.write(tmp_for_register, hdr.p4ml_entries.data23); }
+action processentry25() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register25.write(tmp_for_register, hdr.p4ml_entries.data24); }
+action processentry26() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register26.write(tmp_for_register, hdr.p4ml_entries.data25); }
+action processentry27() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register27.write(tmp_for_register, hdr.p4ml_entries.data26); }
+action processentry28() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register28.write(tmp_for_register, hdr.p4ml_entries.data27); }
+action processentry29() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register29.write(tmp_for_register, hdr.p4ml_entries.data28); }
+action processentry30() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register30.write(tmp_for_register, hdr.p4ml_entries.data29); }
+action processentry31() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register31.write(tmp_for_register, hdr.p4ml_entries.data30); }
+action processentry32() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register32.write(tmp_for_register, hdr.p4ml_entries.data31); }
+
+action noequ0_processentry1() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register1.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data0; register1.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry2() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register2.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data1; register2.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry3() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register3.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data2; register3.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry4() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register4.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data3; register4.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry5() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register5.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data4; register5.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry6() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register6.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data5; register6.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry7() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register7.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data6; register7.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry8() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register8.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data7; register8.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry9() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register9.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data8; register9.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry10() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register10.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data9; register10.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry11() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register11.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data10; register11.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry12() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register12.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data11; register12.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry13() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register13.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data12; register13.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry14() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register14.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data13; register14.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry15() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register15.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data14; register15.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry16() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register16.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data15; register16.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry17() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register17.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data16; register17.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry18() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register18.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data17; register18.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry19() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register19.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data18; register19.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry20() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register20.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data19; register20.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry21() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register21.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data20; register21.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry22() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register22.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data21; register22.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry23() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register23.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data22; register23.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry24() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register24.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data23; register24.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry25() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register25.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data24; register25.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry26() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register26.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data25; register26.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry27() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register27.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data26; register27.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry28() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register28.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data27; register28.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry29() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register29.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data28; register29.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry30() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register30.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data29; register30.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry31() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register31.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data30; register31.write(tmp_for_register,value_for_processentry); }
+action noequ0_processentry32() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_processentry = 0; register32.read(value_for_processentry, tmp_for_register); value_for_processentry = value_for_processentry + hdr.p4ml_entries.data31; register32.write(tmp_for_register,value_for_processentry); }
+
+action do_cleanEntry1() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register1.write(tmp_for_register,0); }
+action do_cleanEntry2() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register2.write(tmp_for_register,0); }
+action do_cleanEntry3() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register3.write(tmp_for_register,0); }
+action do_cleanEntry4() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register4.write(tmp_for_register,0); }
+action do_cleanEntry5() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register5.write(tmp_for_register,0); }
+action do_cleanEntry6() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register6.write(tmp_for_register,0); }
+action do_cleanEntry7() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register7.write(tmp_for_register,0); }
+action do_cleanEntry8() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register8.write(tmp_for_register,0); }
+action do_cleanEntry9() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register9.write(tmp_for_register,0); }
+action do_cleanEntry10() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register10.write(tmp_for_register,0); }
+action do_cleanEntry11() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register11.write(tmp_for_register,0); }
+action do_cleanEntry12() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register12.write(tmp_for_register,0); }
+action do_cleanEntry13() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register13.write(tmp_for_register,0); }
+action do_cleanEntry14() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register14.write(tmp_for_register,0); }
+action do_cleanEntry15() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register15.write(tmp_for_register,0); }
+action do_cleanEntry16() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register16.write(tmp_for_register,0); }
+action do_cleanEntry17() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register17.write(tmp_for_register,0); }
+action do_cleanEntry18() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register18.write(tmp_for_register,0); }
+action do_cleanEntry19() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register19.write(tmp_for_register,0); }
+action do_cleanEntry20() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register20.write(tmp_for_register,0); }
+action do_cleanEntry21() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register21.write(tmp_for_register,0); }
+action do_cleanEntry22() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register22.write(tmp_for_register,0); }
+action do_cleanEntry23() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register23.write(tmp_for_register,0); }
+action do_cleanEntry24() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register24.write(tmp_for_register,0); }
+action do_cleanEntry25() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register25.write(tmp_for_register,0); }
+action do_cleanEntry26() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register26.write(tmp_for_register,0); }
+action do_cleanEntry27() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register27.write(tmp_for_register,0); }
+action do_cleanEntry28() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register28.write(tmp_for_register,0); }
+action do_cleanEntry29() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register29.write(tmp_for_register,0); }
+action do_cleanEntry30() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register30.write(tmp_for_register,0); }
+action do_cleanEntry31() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register31.write(tmp_for_register,0); }
+action do_cleanEntry32() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register32.write(tmp_for_register,0); }
+
+action processentry1andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register1.write(tmp_for_register, hdr.p4ml_entries.data0); register1.read(hdr.p4ml_entries.data0, tmp_for_register); }
+action processentry2andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register2.write(tmp_for_register, hdr.p4ml_entries.data1); register2.read(hdr.p4ml_entries.data1, tmp_for_register); }
+action processentry3andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register3.write(tmp_for_register, hdr.p4ml_entries.data2); register3.read(hdr.p4ml_entries.data2, tmp_for_register); }
+action processentry4andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register4.write(tmp_for_register, hdr.p4ml_entries.data3); register4.read(hdr.p4ml_entries.data3, tmp_for_register); }
+action processentry5andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register5.write(tmp_for_register, hdr.p4ml_entries.data4); register5.read(hdr.p4ml_entries.data4, tmp_for_register); }
+action processentry6andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register6.write(tmp_for_register, hdr.p4ml_entries.data5); register6.read(hdr.p4ml_entries.data5, tmp_for_register); }
+action processentry7andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register7.write(tmp_for_register, hdr.p4ml_entries.data6); register7.read(hdr.p4ml_entries.data6, tmp_for_register); }
+action processentry8andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register8.write(tmp_for_register, hdr.p4ml_entries.data7); register8.read(hdr.p4ml_entries.data7, tmp_for_register); }
+action processentry9andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register9.write(tmp_for_register, hdr.p4ml_entries.data8); register9.read(hdr.p4ml_entries.data8, tmp_for_register); }
+action processentry10andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register10.write(tmp_for_register, hdr.p4ml_entries.data9); register10.read(hdr.p4ml_entries.data9, tmp_for_register); }
+action processentry11andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register11.write(tmp_for_register, hdr.p4ml_entries.data10); register11.read(hdr.p4ml_entries.data10, tmp_for_register); }
+action processentry12andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register12.write(tmp_for_register, hdr.p4ml_entries.data11); register12.read(hdr.p4ml_entries.data11, tmp_for_register); }
+action processentry13andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register13.write(tmp_for_register, hdr.p4ml_entries.data12); register13.read(hdr.p4ml_entries.data12, tmp_for_register); }
+action processentry14andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register14.write(tmp_for_register, hdr.p4ml_entries.data13); register14.read(hdr.p4ml_entries.data13, tmp_for_register); }
+action processentry15andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register15.write(tmp_for_register, hdr.p4ml_entries.data14); register15.read(hdr.p4ml_entries.data14, tmp_for_register); }
+action processentry16andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register16.write(tmp_for_register, hdr.p4ml_entries.data15); register16.read(hdr.p4ml_entries.data15, tmp_for_register); }
+action processentry17andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register17.write(tmp_for_register, hdr.p4ml_entries.data16); register17.read(hdr.p4ml_entries.data16, tmp_for_register); }
+action processentry18andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register18.write(tmp_for_register, hdr.p4ml_entries.data17); register18.read(hdr.p4ml_entries.data17, tmp_for_register); }
+action processentry19andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register19.write(tmp_for_register, hdr.p4ml_entries.data18); register19.read(hdr.p4ml_entries.data18, tmp_for_register); }
+action processentry20andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register20.write(tmp_for_register, hdr.p4ml_entries.data19); register20.read(hdr.p4ml_entries.data19, tmp_for_register); }
+action processentry21andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register21.write(tmp_for_register, hdr.p4ml_entries.data20); register21.read(hdr.p4ml_entries.data20, tmp_for_register); }
+action processentry22andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register22.write(tmp_for_register, hdr.p4ml_entries.data21); register22.read(hdr.p4ml_entries.data21, tmp_for_register); }
+action processentry23andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register23.write(tmp_for_register, hdr.p4ml_entries.data22); register23.read(hdr.p4ml_entries.data22, tmp_for_register); }
+action processentry24andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register24.write(tmp_for_register, hdr.p4ml_entries.data23); register24.read(hdr.p4ml_entries.data23, tmp_for_register); }
+action processentry25andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register25.write(tmp_for_register, hdr.p4ml_entries.data24); register25.read(hdr.p4ml_entries.data24, tmp_for_register); }
+action processentry26andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register26.write(tmp_for_register, hdr.p4ml_entries.data25); register26.read(hdr.p4ml_entries.data25, tmp_for_register); }
+action processentry27andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register27.write(tmp_for_register, hdr.p4ml_entries.data26); register27.read(hdr.p4ml_entries.data26, tmp_for_register); }
+action processentry28andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register28.write(tmp_for_register, hdr.p4ml_entries.data27); register28.read(hdr.p4ml_entries.data27, tmp_for_register); }
+action processentry29andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register29.write(tmp_for_register, hdr.p4ml_entries.data28); register29.read(hdr.p4ml_entries.data28, tmp_for_register); }
+action processentry30andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register30.write(tmp_for_register, hdr.p4ml_entries.data29); register30.read(hdr.p4ml_entries.data29, tmp_for_register); }
+action processentry31andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register31.write(tmp_for_register, hdr.p4ml_entries.data30); register31.read(hdr.p4ml_entries.data30, tmp_for_register); }
+action processentry32andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register32.write(tmp_for_register, hdr.p4ml_entries.data31); register32.read(hdr.p4ml_entries.data31, tmp_for_register); }
+
+action noequ0_processentry1andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register1.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data0; hdr.p4ml_entries.data0 = value_for_write_to_packet; register1.write(tmp_for_register, hdr.p4ml_entries.data0); }
+action noequ0_processentry2andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register2.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data1; hdr.p4ml_entries.data1 = value_for_write_to_packet; register2.write(tmp_for_register, hdr.p4ml_entries.data1); }
+action noequ0_processentry3andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register3.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data2; hdr.p4ml_entries.data2 = value_for_write_to_packet; register3.write(tmp_for_register, hdr.p4ml_entries.data2); }
+action noequ0_processentry4andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register4.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data3; hdr.p4ml_entries.data3 = value_for_write_to_packet; register4.write(tmp_for_register, hdr.p4ml_entries.data3); }
+action noequ0_processentry5andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register5.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data4; hdr.p4ml_entries.data4 = value_for_write_to_packet; register5.write(tmp_for_register, hdr.p4ml_entries.data4); }
+action noequ0_processentry6andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register6.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data5; hdr.p4ml_entries.data5 = value_for_write_to_packet; register6.write(tmp_for_register, hdr.p4ml_entries.data5); }
+action noequ0_processentry7andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register7.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data6; hdr.p4ml_entries.data6 = value_for_write_to_packet; register7.write(tmp_for_register, hdr.p4ml_entries.data6); }
+action noequ0_processentry8andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register8.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data7; hdr.p4ml_entries.data7 = value_for_write_to_packet; register8.write(tmp_for_register, hdr.p4ml_entries.data7); }
+action noequ0_processentry9andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register9.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data8; hdr.p4ml_entries.data8 = value_for_write_to_packet; register9.write(tmp_for_register, hdr.p4ml_entries.data8); }
+action noequ0_processentry10andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register10.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data9; hdr.p4ml_entries.data9 = value_for_write_to_packet; register10.write(tmp_for_register, hdr.p4ml_entries.data9); }
+action noequ0_processentry11andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register11.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data10; hdr.p4ml_entries.data10 = value_for_write_to_packet; register11.write(tmp_for_register, hdr.p4ml_entries.data10); }
+action noequ0_processentry12andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register12.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data11; hdr.p4ml_entries.data11 = value_for_write_to_packet; register12.write(tmp_for_register, hdr.p4ml_entries.data11); }
+action noequ0_processentry13andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register13.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data12; hdr.p4ml_entries.data12 = value_for_write_to_packet; register13.write(tmp_for_register, hdr.p4ml_entries.data12); }
+action noequ0_processentry14andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register14.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data13; hdr.p4ml_entries.data13 = value_for_write_to_packet; register14.write(tmp_for_register, hdr.p4ml_entries.data13); }
+action noequ0_processentry15andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register15.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data14; hdr.p4ml_entries.data14 = value_for_write_to_packet; register15.write(tmp_for_register, hdr.p4ml_entries.data14); }
+action noequ0_processentry16andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register16.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data15; hdr.p4ml_entries.data15 = value_for_write_to_packet; register16.write(tmp_for_register, hdr.p4ml_entries.data15); }
+action noequ0_processentry17andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register17.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data16; hdr.p4ml_entries.data16 = value_for_write_to_packet; register17.write(tmp_for_register, hdr.p4ml_entries.data16); }
+action noequ0_processentry18andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register18.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data17; hdr.p4ml_entries.data17 = value_for_write_to_packet; register18.write(tmp_for_register, hdr.p4ml_entries.data17); }
+action noequ0_processentry19andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register19.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data18; hdr.p4ml_entries.data18 = value_for_write_to_packet; register19.write(tmp_for_register, hdr.p4ml_entries.data18); }
+action noequ0_processentry20andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register20.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data19; hdr.p4ml_entries.data19 = value_for_write_to_packet; register20.write(tmp_for_register, hdr.p4ml_entries.data19); }
+action noequ0_processentry21andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register21.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data20; hdr.p4ml_entries.data20 = value_for_write_to_packet; register21.write(tmp_for_register, hdr.p4ml_entries.data20); }
+action noequ0_processentry22andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register22.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data21; hdr.p4ml_entries.data21 = value_for_write_to_packet; register22.write(tmp_for_register, hdr.p4ml_entries.data21); }
+action noequ0_processentry23andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register23.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data22; hdr.p4ml_entries.data22 = value_for_write_to_packet; register23.write(tmp_for_register, hdr.p4ml_entries.data22); }
+action noequ0_processentry24andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register24.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data23; hdr.p4ml_entries.data23 = value_for_write_to_packet; register24.write(tmp_for_register, hdr.p4ml_entries.data23); }
+action noequ0_processentry25andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register25.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data24; hdr.p4ml_entries.data24 = value_for_write_to_packet; register25.write(tmp_for_register, hdr.p4ml_entries.data24); }
+action noequ0_processentry26andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register26.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data25; hdr.p4ml_entries.data25 = value_for_write_to_packet; register26.write(tmp_for_register, hdr.p4ml_entries.data25); }
+action noequ0_processentry27andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register27.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data26; hdr.p4ml_entries.data26 = value_for_write_to_packet; register27.write(tmp_for_register, hdr.p4ml_entries.data26); }
+action noequ0_processentry28andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register28.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data27; hdr.p4ml_entries.data27 = value_for_write_to_packet; register28.write(tmp_for_register, hdr.p4ml_entries.data27); }
+action noequ0_processentry29andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register29.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data28; hdr.p4ml_entries.data28 = value_for_write_to_packet; register29.write(tmp_for_register, hdr.p4ml_entries.data28); }
+action noequ0_processentry30andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register30.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data29; hdr.p4ml_entries.data29 = value_for_write_to_packet; register30.write(tmp_for_register, hdr.p4ml_entries.data29); }
+action noequ0_processentry31andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register31.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data30; hdr.p4ml_entries.data30 = value_for_write_to_packet; register31.write(tmp_for_register, hdr.p4ml_entries.data30); }
+action noequ0_processentry32andWriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; bit<32> value_for_write_to_packet = 0; register32.read(value_for_write_to_packet, tmp_for_register); value_for_write_to_packet = value_for_write_to_packet + hdr.p4ml_entries.data31; hdr.p4ml_entries.data31 = value_for_write_to_packet; register32.write(tmp_for_register, hdr.p4ml_entries.data31); }
+
+action entry1WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register1.read(hdr.p4ml_entries.data0, tmp_for_register) ; }
+action entry2WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register2.read(hdr.p4ml_entries.data1, tmp_for_register) ; }
+action entry3WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register3.read(hdr.p4ml_entries.data2, tmp_for_register) ; }
+action entry4WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register4.read(hdr.p4ml_entries.data3, tmp_for_register) ; }
+action entry5WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register5.read(hdr.p4ml_entries.data4, tmp_for_register) ; }
+action entry6WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register6.read(hdr.p4ml_entries.data5, tmp_for_register) ; }
+action entry7WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register7.read(hdr.p4ml_entries.data6, tmp_for_register) ; }
+action entry8WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register8.read(hdr.p4ml_entries.data7, tmp_for_register) ; }
+action entry9WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register9.read(hdr.p4ml_entries.data8, tmp_for_register) ; }
+action entry10WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register10.read(hdr.p4ml_entries.data9, tmp_for_register) ; }
+action entry11WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register11.read(hdr.p4ml_entries.data10, tmp_for_register) ; }
+action entry12WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register12.read(hdr.p4ml_entries.data11, tmp_for_register) ; }
+action entry13WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register13.read(hdr.p4ml_entries.data12, tmp_for_register) ; }
+action entry14WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register14.read(hdr.p4ml_entries.data13, tmp_for_register) ; }
+action entry15WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register15.read(hdr.p4ml_entries.data14, tmp_for_register) ; }
+action entry16WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register16.read(hdr.p4ml_entries.data15, tmp_for_register) ; }
+action entry17WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register17.read(hdr.p4ml_entries.data16, tmp_for_register) ; }
+action entry18WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register18.read(hdr.p4ml_entries.data17, tmp_for_register) ; }
+action entry19WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register19.read(hdr.p4ml_entries.data18, tmp_for_register) ; }
+action entry20WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register20.read(hdr.p4ml_entries.data19, tmp_for_register) ; }
+action entry21WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register21.read(hdr.p4ml_entries.data20, tmp_for_register) ; }
+action entry22WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register22.read(hdr.p4ml_entries.data21, tmp_for_register) ; }
+action entry23WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register23.read(hdr.p4ml_entries.data22, tmp_for_register) ; }
+action entry24WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register24.read(hdr.p4ml_entries.data23, tmp_for_register) ; }
+action entry25WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register25.read(hdr.p4ml_entries.data24, tmp_for_register) ; }
+action entry26WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register26.read(hdr.p4ml_entries.data25, tmp_for_register) ; }
+action entry27WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register27.read(hdr.p4ml_entries.data26, tmp_for_register) ; }
+action entry28WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register28.read(hdr.p4ml_entries.data27, tmp_for_register) ; }
+action entry29WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register29.read(hdr.p4ml_entries.data28, tmp_for_register) ; }
+action entry30WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register30.read(hdr.p4ml_entries.data29, tmp_for_register) ; }
+action entry31WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register31.read(hdr.p4ml_entries.data30, tmp_for_register) ; }
+action entry32WriteToPacket() { bit<32> tmp_for_register = (bit<32>) hdr.p4ml_agtr_index.agtr; register32.read(hdr.p4ml_entries.data31, tmp_for_register) ; }
+# 82 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/tables.p4" 1
+
+
+
+
+// 221215 2. 테이블 하나에 모든 액션을 다넣고 key를 설정
+
+
+
+
+
+action nop1(){}
+action nop2(){}
+action nop3(){}
+action nop4(){}
+action nop5(){}
+action nop6(){}
+action nop7(){}
+action nop8(){}
+action nop9(){}
+action nop10(){}
+action nop11(){}
+action nop12(){}
+action nop13(){}
+action nop14(){}
+action nop15(){}
+action nop16(){}
+action nop17(){}
+action nop18(){}
+action nop19(){}
+action nop20(){}
+action nop21(){}
+action nop22(){}
+action nop23(){}
+action nop24(){}
+action nop25(){}
+action nop26(){}
+action nop27(){}
+action nop28(){}
+action nop29(){}
+action nop30(){}
+action nop31(){}
+action nop32(){}
+# 61 "IITP/NativeUP4/p4src/include/tables.p4"
+table NewprocessEntry1 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry1WriteToPacket; processentry1; noequ0_processentry1; noequ0_processentry1andWriteToPacket; nop1; } }
+table NewprocessEntry2 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry2WriteToPacket; processentry2; noequ0_processentry2; noequ0_processentry2andWriteToPacket; nop2; } }
+table NewprocessEntry3 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry3WriteToPacket; processentry3; noequ0_processentry3; noequ0_processentry3andWriteToPacket; nop3; } }
+table NewprocessEntry4 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry4WriteToPacket; processentry4; noequ0_processentry4; noequ0_processentry4andWriteToPacket; nop4; } }
+table NewprocessEntry5 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry5WriteToPacket; processentry5; noequ0_processentry5; noequ0_processentry5andWriteToPacket; nop5; } }
+table NewprocessEntry6 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry6WriteToPacket; processentry6; noequ0_processentry6; noequ0_processentry6andWriteToPacket; nop6; } }
+table NewprocessEntry7 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry7WriteToPacket; processentry7; noequ0_processentry7; noequ0_processentry7andWriteToPacket; nop7; } }
+table NewprocessEntry8 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry8WriteToPacket; processentry8; noequ0_processentry8; noequ0_processentry8andWriteToPacket; nop8; } }
+table NewprocessEntry9 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry9WriteToPacket; processentry9; noequ0_processentry9; noequ0_processentry9andWriteToPacket; nop9; } }
+table NewprocessEntry10 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry10WriteToPacket; processentry10; noequ0_processentry10; noequ0_processentry10andWriteToPacket; nop10; } }
+table NewprocessEntry11 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry11WriteToPacket; processentry11; noequ0_processentry11; noequ0_processentry11andWriteToPacket; nop11; } }
+table NewprocessEntry12 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry12WriteToPacket; processentry12; noequ0_processentry12; noequ0_processentry12andWriteToPacket; nop12; } }
+table NewprocessEntry13 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry13WriteToPacket; processentry13; noequ0_processentry13; noequ0_processentry13andWriteToPacket; nop13; } }
+table NewprocessEntry14 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry14WriteToPacket; processentry14; noequ0_processentry14; noequ0_processentry14andWriteToPacket; nop14; } }
+table NewprocessEntry15 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry15WriteToPacket; processentry15; noequ0_processentry15; noequ0_processentry15andWriteToPacket; nop15; } }
+table NewprocessEntry16 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry16WriteToPacket; processentry16; noequ0_processentry16; noequ0_processentry16andWriteToPacket; nop16; } }
+table NewprocessEntry17 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry17WriteToPacket; processentry17; noequ0_processentry17; noequ0_processentry17andWriteToPacket; nop17; } }
+table NewprocessEntry18 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry18WriteToPacket; processentry18; noequ0_processentry18; noequ0_processentry18andWriteToPacket; nop18; } }
+table NewprocessEntry19 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry19WriteToPacket; processentry19; noequ0_processentry19; noequ0_processentry19andWriteToPacket; nop19; } }
+table NewprocessEntry20 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry20WriteToPacket; processentry20; noequ0_processentry20; noequ0_processentry20andWriteToPacket; nop20; } }
+table NewprocessEntry21 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry21WriteToPacket; processentry21; noequ0_processentry21; noequ0_processentry21andWriteToPacket; nop21; } }
+table NewprocessEntry22 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry22WriteToPacket; processentry22; noequ0_processentry22; noequ0_processentry22andWriteToPacket; nop22; } }
+table NewprocessEntry23 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry23WriteToPacket; processentry23; noequ0_processentry23; noequ0_processentry23andWriteToPacket; nop23; } }
+table NewprocessEntry24 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry24WriteToPacket; processentry24; noequ0_processentry24; noequ0_processentry24andWriteToPacket; nop24; } }
+table NewprocessEntry25 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry25WriteToPacket; processentry25; noequ0_processentry25; noequ0_processentry25andWriteToPacket; nop25; } }
+table NewprocessEntry26 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry26WriteToPacket; processentry26; noequ0_processentry26; noequ0_processentry26andWriteToPacket; nop26; } }
+table NewprocessEntry27 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry27WriteToPacket; processentry27; noequ0_processentry27; noequ0_processentry27andWriteToPacket; nop27; } }
+table NewprocessEntry28 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry28WriteToPacket; processentry28; noequ0_processentry28; noequ0_processentry28andWriteToPacket; nop28; } }
+table NewprocessEntry29 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry29WriteToPacket; processentry29; noequ0_processentry29; noequ0_processentry29andWriteToPacket; nop29; } }
+table NewprocessEntry30 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry30WriteToPacket; processentry30; noequ0_processentry30; noequ0_processentry30andWriteToPacket; nop30; } }
+table NewprocessEntry31 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry31WriteToPacket; processentry31; noequ0_processentry31; noequ0_processentry31andWriteToPacket; nop31; } }
+table NewprocessEntry32 { key = { md.mdata.isAggregate : ternary; md.mdata.agtr_complete : ternary; md.mdata.bitmap : ternary; } actions = { entry32WriteToPacket; processentry32; noequ0_processentry32; noequ0_processentry32andWriteToPacket; nop32; } }
+# 83 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/common.p4" 1
+
+
+
+// RegisterAction<bit<32>, _, bit<32>>(agtr_time) cleaning_agtr_time  = {
+//     void apply(inout bit<32> value){
+//         value = 0;
+//     }
+// };
+
+// RegisterAction<bit<32>, _, bit<32>>(ecn_register) cleaning_ecn  = {
+//     void apply(inout bit<32> value){
+//         value = 0;
+//     }
+// };
+
+
+// RegisterAction<bit<32>, _, bit<32>>(bitmap) cleaning_bitmap  = {
+//     void apply(inout bit<32> value){
+//         value = 0;
+//     }
+// };
+// RegisterAction<bit<32>, _, bit<32>>(bitmap) read_write_bitmap  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         value = value | hdr.p4ml.bitmap; // ig_md.mdata.bitmap
+//         read_value = value;
+//     }
+// };
+// RegisterAction<bit<32>, _, bit<32>>(bitmap) read_write_bitmap_resend  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         value = 0; 
+//         read_value = value; // ig_md.mdata.bitmap
+//     }
+// };
+
+
+// // RegisterAction<bit<32>, _, bit<32>>(appID_and_Seq) check_app_id_and_seq  = {
+// //     void apply(inout bit<32> value, out bit<32> read_value){
+// //         if (value[31:16] - (bit<16>)hdr.p4ml.quantization_level >= 0 && value[15:0] != hdr.p4ml.appIDandSeqNum[15:0]){ // value[31:24] < hdr.p4ml.appIDandSeqNum[31:24]
+// //             value = hdr.p4ml.appIDandSeqNum;
+// //             read_value = value; // ig_md.mdata.isMyAppIDandMyCurrentSeq;
+// //         }
+// //     }
+// // };
+
+// // RegisterAction<value_pair_t, _, bit<32>>(appID_and_Seq_pair) check_app_id_and_seq = { ///
+// //     void apply(inout value_pair_t value, out bit<32> read_value) {
+// //         if (value.quantization_level - (bit<32>)hdr.p4ml.quantization_level >= 0 && value.appID_and_Seq != hdr.p4ml.appIDandSeqNum){
+
+// //         }
+// //         else{
+// //             value.appID_and_Seq = hdr.p4ml.appIDandSeqNum;
+// //             read_value = value.appID_and_Seq;
+// //         }
+// //     }
+// // };
+
+// RegisterAction<value_pair_t, _, bit<32>>(appID_and_Seq_pair) check_app_id_and_seq = {
+//     void apply(inout value_pair_t value, out bit<32> read_value) {
+//         // bit<32> quantization_diff = value.quantization_level - (bit<32>)hdr.p4ml.quantization_level;
+//         // bool same_app_id_and_seq = value.appID_and_Seq != hdr.p4ml.appIDandSeqNum;
+
+//         if (value.quantization_level > 0 ) {
+//             // ...
+//         } else {
+//             value.appID_and_Seq = hdr.p4ml.appIDandSeqNum;
+//             // read_value = value.appID_and_Seq;
+//         }
+//         read_value = value.appID_and_Seq;
+//     }
+// };
+
+
+
+
+
+
+
+// RegisterAction<bit<8>, _, bit<8>>(quantization_level) check_quantization_level  = {
+//     void apply(inout bit<8> value, out bit<8> read_value){
+//         if (value - (bit<8>)hdr.p4ml.quantization_level >= 128){   // 32bit -> preempt
+//             value = (bit<8>)hdr.p4ml.quantization_level;
+//             read_value = 1; // ig_md.mdata.steal = 1;
+//         }
+//         // if (value == 1 && hdr.p4ml.quantization_level == 0){   // 32bit -> preempt
+//         //     value = (bit<8>)hdr.p4ml.quantization_level + 1;
+//         //     read_value = 1; // ig_md.mdata.steal = 1;
+//         // }
+//         else{
+//             read_value = 0; // when late 32bit or 1bit -> can't take away
+//         }
+//     }
+// };
+
+// RegisterAction<bit<32>, _, bit<32>>(appID_and_Seq) check_app_id_and_seq_resend  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         if (value == hdr.p4ml.appIDandSeqNum){
+//             value = 0;
+//             read_value = value; // ig_md.mdata.isMyAppIDandMyCurrentSeq;
+//         }
+//     }
+// };
+
+
+
+
+
+// RegisterAction<bit<32>, _, bit<32>>(appID_and_Seq) clean_app_id_and_seq  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         if (value == hdr.p4ml.appIDandSeqNum){
+//             value = 0;
+//             read_value = hdr.p4ml.appIDandSeqNum; // ig_md.mdata.isMyAppIDandMyCurrentSeq;
+//         }
+//     }
+// };
+
+// RegisterAction<bit<32>, _, bit<32>>(agtr_time) check_agtrTime  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         if (ig_md.mdata.isAggregate != 0){
+//             value = value + 1;
+//         }
+//         read_value = value; // ig_md.mdata.current_agtr_time; 
+//     }
+// };
+
+// RegisterAction<bit<32>, _, bit<32>>(agtr_time) check_resend_agtrTime  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         if (ig_md.mdata.isAggregate != 0){
+//             value = 0;
+//         }
+//         else{
+//             value = 0;
+//         }
+//         read_value = (bit<32>)hdr.p4ml.agtr_time; // ig_md.mdata.mdata.current_agtr_time; 
+//     }
+// };
+
+// //Egress
+// // RegisterAction<bit<32>, _, bit<32>>(dqueue_alert_threshold) do_comp_qdepth  = {
+// //     void apply(inout bit<32> value, out bit<32> read_value){
+// //         if (eg_intr_md.deq_qdepth >= 1000){
+// //             read_value = eg_intr_md.deq_qdepth; // eg_md.mdata.qdepth;
+// //         }
+// //     }
+// // };
+
+// RegisterAction<bit<32>, _, bit<32>>(ecn_register) do_check_ecn  = {
+//     void apply(inout bit<32> value, out bit<32> read_value){
+//         if (value == 1){
+//             value = value | ig_md.mdata.is_ecn;
+//             read_value = (bit<32>)hdr.p4ml.ECN; // ig_md.mdata.value_one; 
+//         }
+//     }
+// };
+
+
+
+// Action
+action process_bitmap() {
+    bit<32> value_for_bitmap = 0;
+    // bit<32> index_for_register = (bit<32>)hdr.p4ml_agtr_index.agtr;
+    bitmap.read(value_for_bitmap, index_for_register);
+    value_for_bitmap = value_for_bitmap | hdr.p4ml.bitmap;
+    bitmap.write(index_for_register, value_for_bitmap);
+    md.mdata.bitmap = value_for_bitmap;
+    md.mdata.isAggregate = hdr.p4ml.bitmap & md.mdata.bitmap; ////
+    md.mdata.integrated_bitmap = hdr.p4ml.bitmap | md.mdata.bitmap; ////
+}
+
+action process_bitmap_resend() {
+    bit<32> value_for_bitmap_resend;
+    bitmap.read(value_for_bitmap_resend ,index_for_register);
+    md.mdata.bitmap = value_for_bitmap_resend;
+    bitmap.write(index_for_register,0);
+    // md.mdata.bitmap = 0;
+    md.mdata.isAggregate = hdr.p4ml.bitmap & md.mdata.bitmap; ////
+    md.mdata.integrated_bitmap = hdr.p4ml.bitmap | md.mdata.bitmap; ////
+}
+
+// TODO:
+action check_aggregate_and_forward() {
+    // this is is for aggregation needed checking
+    md.mdata.isAggregate = hdr.p4ml.bitmap & md.mdata.bitmap; ////-
+    md.mdata.integrated_bitmap = hdr.p4ml.bitmap | md.mdata.bitmap; ////-
+}
+
+action clean_agtr_time() {
+    agtr_time.write(index_for_register,0);
+}
+
+action clean_ecn() {
+    ecn_register.write(index_for_register, 0);
+}
+
+action clean_bitmap() {
+    // cleaning_bitmap.execute(hdr.p4ml_agtr_index.agtr);
+    bitmap.write(index_for_register, 0);
+}
+
+action multicast(bit<16> group) {
+    standard_metadata.mcast_grp = group;
+}
+
+
+// RegisterAction<value_pair_t, _, bit<32>>(appID_and_Seq_pair) check_app_id_and_seq = {
+//     void apply(inout value_pair_t value, out bit<32> read_value) {
+//         // bit<32> quantization_diff = value.quantization_level - (bit<32>)hdr.p4ml.quantization_level;
+//         // bool same_app_id_and_seq = value.appID_and_Seq != hdr.p4ml.appIDandSeqNum;
+
+//         if (value.quantization_level > 0 ) {
+//             // ...
+//         } else {
+//             value.appID_and_Seq = hdr.p4ml.appIDandSeqNum;
+//             // read_value = value.appID_and_Seq;
+//         }
+//         read_value = value.appID_and_Seq;
+//     }
+// };
+
+// action check_appID_and_seq() {
+//     ig_md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>)check_app_id_and_seq.execute(hdr.p4ml_agtr_index.agtr);
+//     //modify_field(mdata.qdepth, 0);   
+// }
+
+//////////////////////////////////TODO modify____CHECK!!!!!!!!!!!!!!!!!!!!!!
+// action check_appID_and_seq() {
+//     // hdr.p4ml_agtr_index.agtr : 16bit
+//     // hdr.p4ml.appIDandSeqNum : 32bit
+//     appID_and_Seq_pair.write(index_for_register, hdr.p4ml.appIDandSeqNum);
+//     appID_and_Seq.write(index_for_register, hdr.p4ml.appIDandSeqNum);
+//     md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>) hdr.p4ml.appIDandSeqNum;
+// }
+
+action check_appID_and_seq() {
+    // hdr.p4ml_agtr_index.agtr : 16bit
+    // hdr.p4ml.appIDandSeqNum : 32bit
+    appID_and_Seq_pair.write(index_for_register, hdr.p4ml.appIDandSeqNum);
+    appID_and_Seq.write(index_for_register, hdr.p4ml.appIDandSeqNum); // should be in ?_0516
+}
+
+////////////////////////////////////////////////////////////////ToDo modifiy
+
+action check_appID_and_seq_resend() {
+    // ig_md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>)check_app_id_and_seq_resend.execute(hdr.p4ml_agtr_index.agtr);
+
+    md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>) hdr.p4ml.appIDandSeqNum ;
+    appID_and_Seq.write(index_for_register, 0);
+    // md.mdata.isMyAppIDandMyCurrentSeq = 0;
+ //   modify_field(mdata.qdepth, 0);   
+}
+
+action clean_appID_and_seq() {
+    appID_and_Seq.write(index_for_register, 0);
+    md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>)hdr.p4ml.appIDandSeqNum;
+}
+
+action check_agtr_time_nonzero() {
+    // ig_md.mdata.current_agtr_time = (bit<8>)check_agtrTime.execute(hdr.p4ml_agtr_index.agtr);
+    // ig_md.mdata.agtr_complete = ~(ig_md.mdata.current_agtr_time ^ hdr.p4ml.agtr_time); ///
+    agtr_time.read(Check_for_aggregate, index_for_register);
+    index_for_current_agtr_time = Check_for_aggregate + 1;
+    agtr_time.write(index_for_register,index_for_current_agtr_time);
+    md.mdata.current_agtr_time = (bit<8>) index_for_current_agtr_time;
+    md.mdata.agtr_complete = ~(md.mdata.current_agtr_time ^ hdr.p4ml.agtr_time);
+}
+
+action check_agtr_time_zero() {
+    // ig_md.mdata.current_agtr_time = (bit<8>)check_agtrTime.execute(hdr.p4ml_agtr_index.agtr);
+    // ig_md.mdata.agtr_complete = ~(ig_md.mdata.current_agtr_time ^ hdr.p4ml.agtr_time); ///
+    agtr_time.read(Check_for_aggregate, index_for_register);
+    md.mdata.current_agtr_time = (bit<8>)Check_for_aggregate;
+    md.mdata.agtr_complete = ~(md.mdata.current_agtr_time ^ hdr.p4ml.agtr_time);
+}
+
+action check_resend_agtr_time() {
+    agtr_time.write(index_for_register, 0);
+    md.mdata.current_agtr_time = (bit<8>)hdr.p4ml.agtr_time;
+    md.mdata.agtr_complete = ~(md.mdata.current_agtr_time ^ hdr.p4ml.agtr_time);
+}
+
+action modify_packet_bitmap() {
+    // modify_field(p4ml.bitmap, mdata.integrated_bitmap);
+    hdr.p4ml.bitmap = md.mdata.integrated_bitmap;
+}
+
+// egress actions
+
+// action do_qdepth() {
+//     eg_md.mdata.qdepth = do_comp_qdepth.execute(0);
+// }
+
+// action modify_ecn() {
+//     // modify_field(p4ml.ECN, 1);
+//     hdr.p4ml.ECN = 1;
+// }
+
+// action mark_ecn() {
+//     // bit_or(mdata.is_ecn, mdata.qdepth, mdata.is_ecn);
+//     eg_md.mdata.is_ecn = eg_md.mdata.qdepth | eg_md.mdata.is_ecn;
+// }
+
+// action modify_ipv4_ecn() {
+//     // modify_field(ipv4.ecn, 3);
+//     hdr.ipv4.ecn = 3;
+// }
+
+action check_ecn() {
+    // ig_md.mdata.value_one = (bit<1>)do_check_ecn.execute(hdr.p4ml_agtr_index.agtr);
+
+    ecn_register.write(index_for_register, Check_value);
+    md.mdata.value_one = (bit<1>) hdr.p4ml.ECN;
+}
+
+action setup_ecn() {
+    // modify_field(mdata.is_ecn, 1);    
+    md.mdata.is_ecn = 1;
+}
+
+action tag_collision_incoming() {
+    // modify_field(p4ml.isSWCollision, 1);
+    // hdr.p4ml_bg.isSWCollision =  1;
+    // modify_field(p4ml.bitmap, mdata.isMyAppIDandMyCurrentSeq);
+}
+
+action set_egr(bit<9> egress_spec) {
+    // modify_field(ig_intr_md_for_tm.ucast_egress_port, egress_spec);
+    // ig_intr_md_for_tm.ucast_egress_port = egress_spec;
+    // increase_p4ml_counter.execute(ig_intr_md.ingress_port);
+    standard_metadata.egress_spec = egress_spec;
+}
+
+action set_egr_and_set_index(bit<9> egress_spec) {
+    // modify_field(ig_intr_md_for_tm.ucast_egress_port, egress_spec);
+    // ig_intr_md_for_tm.ucast_egress_port = egress_spec;
+    // modify_field(p4ml.dataIndex, 1);
+    // hdr.p4ml.dataIndex = 1;
+    // increase_p4ml_counter.execute(ig_intr_md.ingress_port);
+    standard_metadata.egress_spec = egress_spec;
+    hdr.p4ml.dataIndex = 1;
+}
+
+action agg_complete_and_broadcast(bit<16> group) {
+    standard_metadata.mcast_grp = group;
+}
+
+
+
+
+action nop()
+{
+}
+
+action drop_pkt() {
+    // drop();
+    // ig_intr_md_for_dprsr.drop_ctl = 1;
+    mark_to_drop(standard_metadata);
+
+}
+
+// unused
+// action increase_counter() {
+//     increase_p4ml_counter.execute(0);
+// }
+
+action check_quantization_level_action() { ///
+    quantization_level_const = (bit<8>) hdr.p4ml.quantization_level;
+    quantization_level.write(index_for_register, quantization_level_const);
+    md.mdata.preemption = 1;
+}
+
+table check_quantization_level_table { ///
+    actions = {
+        check_quantization_level_action;
+    }
+    default_action = check_quantization_level_action;
+    size = 1;
+}
+
+
+table bitmap_table {
+    actions = {
+        process_bitmap;
+    }
+    default_action = process_bitmap();
+    size = 1;
+}
+
+table bitmap_resend_table {
+    actions = {
+        process_bitmap_resend;
+    }
+    default_action = process_bitmap_resend();
+    size = 1;
+}
+
+table bitmap_aggregate_table {
+    actions = {
+        check_aggregate_and_forward;
+    }
+    default_action = check_aggregate_and_forward();
+    size = 1;
+}
+
+table agtr_time_table_nonzero {
+    actions = {
+        check_agtr_time_nonzero;
+    }
+    default_action = check_agtr_time_nonzero();
+    size = 1;
+}
+
+table agtr_time_table_zero {
+    actions = {
+        check_agtr_time_zero;
+    }
+    default_action = check_agtr_time_zero();
+    size = 1;
+}
+
+table agtr_time_resend_table {
+    actions = {
+        check_resend_agtr_time;
+    }
+    default_action = check_resend_agtr_time();
+    size = 1;
+}
+
+table immd_outPort_table {
+    key = {
+        // p4ml.appIDandSeqNum mask 0xFFFF0000: exact;
+        hdr.p4ml.appIDandSeqNum : ternary;
+
+    }
+    actions = {
+        set_egr;
+    }
+}
+
+table outPort_table {
+    key = {
+        // p4ml.appIDandSeqNum mask 0xFFFF0000: exact;
+        hdr.p4ml.appIDandSeqNum : ternary;
+        standard_metadata.ingress_port: exact;
+        hdr.p4ml.dataIndex: exact;
+        hdr.p4ml.PSIndex: exact;
+        md.mdata.isAggregate : ternary; ///
+        md.mdata.agtr_complete : ternary; ///
+        md.mdata.isAlreadyCleared : ternary;
+    }
+    actions = {
+  nop;
+        set_egr;
+        set_egr_and_set_index;
+        drop_pkt;
+        agg_complete_and_broadcast; //
+    }
+    default_action = drop_pkt();
+}
+
+table bg_outPort_table {
+    key = {
+        // useless here, just can't use default action for variable
+        // hdr.p4ml_bg.isACK : exact;
+    }
+    actions = {
+        set_egr;
+  nop;
+    }
+}
+
+table multicast_table {
+    key = {
+        hdr.p4ml.isACK: exact;
+        // hdr.p4ml.appIDandSeqNum mask 0xFFFF0000: exact;
+        hdr.p4ml.appIDandSeqNum : ternary;
+        standard_metadata.ingress_port: exact;
+        hdr.p4ml.dataIndex: exact;
+    }
+    actions = {
+        multicast; drop_pkt; set_egr_and_set_index;
+    }
+    default_action = drop_pkt();
+}
+
+
+table clean_agtr_time_table {
+    actions = {
+        clean_agtr_time;
+    }
+    default_action = clean_agtr_time();
+    size = 1;
+}
+
+table clean_ecn_table {
+    actions = {
+        clean_ecn;
+    }
+    default_action = clean_ecn();
+    size = 1;
+}
+
+
+table clean_bitmap_table {
+    actions = {
+        clean_bitmap;
+    }
+    default_action = clean_bitmap();
+    size = 1;
+}
+
+// /* Counter */
+// Register<bit<32>, bit<32>>(1) p4ml_counter;
+
+// RegisterAction<bit<32>, _, bit<32>>(p4ml_counter) increase_p4ml_counter = {
+//     void apply(inout bit<32> value){
+//         value = value + 1;
+//     }
+// };
+
+// table forward_counter_table {
+//         actions =  {
+//         increase_counter;
+//     }
+//     default_action = increase_counter();
+// }
+
+table appID_and_seq_table {
+        actions = {
+        check_appID_and_seq;
+    }
+    default_action = check_appID_and_seq();
+}
+
+table appID_and_seq_resend_table {
+        actions = {
+        check_appID_and_seq_resend;
+    }
+    default_action = check_appID_and_seq_resend();
+}
+
+table clean_appID_and_seq_table {
+        actions = {
+        clean_appID_and_seq;
+    }
+    default_action = clean_appID_and_seq();
+}
+
+table modify_packet_bitmap_table {
+    key = {
+        hdr.p4ml.dataIndex: exact;
+        md.mdata.isAggregate : ternary; ///
+        md.mdata.agtr_complete : ternary; ///        
+    }
+        actions = {
+        modify_packet_bitmap; nop;
+    }
+    default_action = modify_packet_bitmap(); //
+    // default_action = nop(); //
+}
+
+// table qdepth_table {
+//     actions =  {
+//         do_qdepth;
+//     }
+//     default_action = do_qdepth();
+// }
+
+// table modify_ecn_table {
+//     actions =  {
+//         modify_ecn;
+//     }
+//     default_action = modify_ecn();
+// }
+
+// table mark_ecn_ipv4_table {
+//     actions =  {
+//         modify_ipv4_ecn;
+//     }
+//     default_action = modify_ipv4_ecn();
+// }
+
+// unused
+// table ecn_mark_table {
+//     actions =  {
+//         mark_ecn;
+//     }
+//     default_action = mark_ecn();
+// }
+
+table ecn_register_table {
+    actions = {
+        check_ecn;
+    }
+    default_action = check_ecn();
+}
+
+table setup_ecn_table {
+    actions = {
+        setup_ecn;
+    }
+    default_action = setup_ecn();
+}
+
+table forward {
+    key = {
+        hdr.ethernet.dstAddr : exact;
+    }
+    actions = {
+        set_egr; nop; drop_pkt;
+    }
+    default_action = drop_pkt();
+}
+
+table drop_table {
+    key = {
+        standard_metadata.ingress_port: exact;
+        hdr.p4ml.dataIndex : exact;
+        md.mdata.isAggregate : ternary; ///
+        md.mdata.agtr_complete : ternary; ///
+        standard_metadata.instance_type: exact; ///
+    }
+    actions = {
+        drop_pkt; set_egr; set_egr_and_set_index; nop;
+    }
+    // default_action = drop_pkt();
+    default_action = nop();
+}
+
+table tag_collision_incoming_table {
+    actions = {
+        tag_collision_incoming;
+    }
+    default_action = tag_collision_incoming();
+}
+# 84 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+
+//------------------------------------------------------------------------------
+// UP4 BLOCK
+//------------------------------------------------------------------------------
+
+    action _initialize_metadata() {
+        md.session_meter_idx_internal = DEFAULT_SESSION_METER_IDX;
+        md.app_meter_idx_internal = DEFAULT_APP_METER_IDX;
+        md.preserved_ingress_port = (bit<32>) standard_metadata.ingress_port;
+    }
+
+    table my_station {
+        key = {
+            hdr.ethernet.dstAddr : exact @name("dst_mac");
+        }
+        actions = {
+            NoAction;
+        }
+    }
+
+    action set_source_iface(Direction direction) {
+        // Interface type can be access, core (see InterfaceType enum)
+        // If interface is from the control plane, direction can be either up or down
+        md.direction = direction;
+    }
+
+    table interfaces {
+        key = {
+            hdr.ipv4.dstAddr : lpm @name("ipv4_dst_prefix");
+        }
+        actions = {
+            set_source_iface;
+        }
+        const default_action = set_source_iface(Direction.UNKNOWN);
+    }
+
+    @hidden
+    action gtpu_decap() {
+        hdr.ipv4 = hdr.inner_ipv4;
+        hdr.inner_ipv4.setInvalid();
+        hdr.udp = hdr.inner_udp;
+        hdr.inner_udp.setInvalid();
+        hdr.tcp = hdr.inner_tcp;
+        hdr.inner_tcp.setInvalid();
+        hdr.icmp = hdr.inner_icmp;
+        hdr.inner_icmp.setInvalid();
+        hdr.gtpu.setInvalid();
+        hdr.gtpu_options.setInvalid();
+        hdr.gtpu_ext_psc.setInvalid();
+    }
+
+    action do_drop() {
+        mark_to_drop(standard_metadata);
+        exit;
+    }
+
+    action set_session_uplink() {
+        md.needs_gtpu_decap = true;
+    }
+
+    action set_session_uplink_drop() {
+        md.needs_dropping = true;
+    }
+
+    action set_session_downlink(tunnel_peer_id_t tunnel_peer_id) {
+        md.tunnel_peer_id = tunnel_peer_id;
+    }
+    action set_session_downlink_drop() {
+        md.needs_dropping = true;
+    }
+
+    action set_session_downlink_buff() {
+        md.needs_buffering = true;
+    }
+
+    table sessions_uplink {
+        key = {
+            hdr.ipv4.dstAddr : exact @name("n3_address");
+            md.teid : exact @name("teid");
+            // egress_port??
+        }
+        actions = {
+            set_session_uplink;
+            set_session_uplink_drop;
+            @defaultonly do_drop;
+        }
+        const default_action = do_drop;
+    }
+
+    table sessions_downlink {
+        key = {
+            hdr.ipv4.dstAddr : exact @name("ue_address");
+        }
+        actions = {
+            set_session_downlink;
+            set_session_downlink_drop;
+            set_session_downlink_buff;
+            @defaultonly do_drop;
+        }
+        const default_action = do_drop;
+    }
+
+    action uplink_term_fwd() {
+    }
+
+    action uplink_term_drop() {
+        md.needs_dropping = true;
+    }
+
+    // QFI = 0 for 4G traffic
+    action downlink_term_fwd(teid_t teid, qfi_t qfi) {
+        md.tunnel_out_teid = teid;
+        md.tunnel_out_qfi = qfi;
+    }
+
+    action downlink_term_drop() {
+        md.needs_dropping = true;
+    }
+
+    table terminations_uplink {
+        key = {
+            md.ue_addr : exact @name("ue_address"); // Session ID
+        }
+        actions = {
+            uplink_term_fwd;
+            uplink_term_drop;
+            @defaultonly do_drop;
+        }
+        const default_action = do_drop;
+    }
+
+    table terminations_downlink {
+        key = {
+            md.ue_addr : exact @name("ue_address"); // Session ID
+        }
+        actions = {
+            downlink_term_fwd;
+            downlink_term_drop;
+            @defaultonly do_drop;
+        }
+        const default_action = do_drop;
+    }
+
+    action load_tunnel_param(ipv4_addr_t src_addr,
+                             ipv4_addr_t dst_addr,
+                             l4_port_t sport
+                             ) {
+        md.tunnel_out_src_ipv4_addr = src_addr;
+        md.tunnel_out_dst_ipv4_addr = dst_addr;
+        md.tunnel_out_udp_sport = sport;
+        md.needs_tunneling = true;
+    }
+
+    table tunnel_peers {
+        key = {
+            md.tunnel_peer_id : exact @name("tunnel_peer_id");
+        }
+        actions = {
+            load_tunnel_param;
+        }
+    }
+
+    @hidden
+    action _udp_encap(ipv4_addr_t src_addr, ipv4_addr_t dst_addr,
+                      l4_port_t udp_sport, l4_port_t udp_dport,
+                      bit<16> ipv4_total_len,
+                      bit<16> udp_len) {
+        hdr.inner_udp = hdr.udp;
+        hdr.udp.setInvalid();
+        hdr.inner_tcp = hdr.tcp;
+        hdr.tcp.setInvalid();
+        hdr.inner_icmp = hdr.icmp;
+        hdr.icmp.setInvalid();
+        hdr.udp.setValid();
+        hdr.udp.srcPort = udp_sport;
+        hdr.udp.dstPort = udp_dport;
+        hdr.udp.length_ = udp_len;
+        hdr.udp.checksum = 0; // Never updated due to p4 limitations
+
+        hdr.inner_ipv4 = hdr.ipv4;
+        hdr.ipv4.setValid();
+        hdr.ipv4.version = IP_VERSION_4;
+        hdr.ipv4.ihl = 5;
+        hdr.ipv4.dscp = 0;
+        hdr.ipv4.ecn = 0;
+        hdr.ipv4.totalLen = ipv4_total_len;
+        hdr.ipv4.identification = 0x1513; // TODO: change this to timestamp or some incremental num
+        hdr.ipv4.flags = 0;
+        hdr.ipv4.fragOffset = 0;
+        hdr.ipv4.ttl = DEFAULT_IPV4_TTL;
+        hdr.ipv4.protocol = IpProtocol.UDP;
+        hdr.ipv4.srcAddr = src_addr;
+        hdr.ipv4.dstAddr = dst_addr;
+        hdr.ipv4.hdr_checksum = 0; // Updated later
+
+
+    }
+
+    @hidden
+    action _gtpu_encap(teid_t teid) {
+        hdr.gtpu.setValid();
+        hdr.gtpu.version = GTP_V1;
+        hdr.gtpu.pt = GTP_PROTOCOL_TYPE_GTP;
+        hdr.gtpu.spare = 0;
+        hdr.gtpu.ex_flag = 0;
+        hdr.gtpu.seq_flag = 0;
+        hdr.gtpu.npdu_flag = 0;
+        hdr.gtpu.msgtype = GTPUMessageType.GPDU;
+        hdr.gtpu.msglen = hdr.inner_ipv4.totalLen;
+        hdr.gtpu.teid = teid;
+    }
+
+    action do_gtpu_tunnel() {
+        _udp_encap(md.tunnel_out_src_ipv4_addr,
+                   md.tunnel_out_dst_ipv4_addr,
+                   md.tunnel_out_udp_sport,
+                   (bit<16>)L4Port.GTP_GPDU,
+                   hdr.ipv4.totalLen + 20 + 8 + 8,
+                   hdr.ipv4.totalLen + 8 + 8);
+        _gtpu_encap(md.tunnel_out_teid);
+    }
+
+
+    action do_gtpu_tunnel_with_psc() {
+        _udp_encap(md.tunnel_out_src_ipv4_addr,
+                   md.tunnel_out_dst_ipv4_addr,
+                   md.tunnel_out_udp_sport,
+                   (bit<16>)L4Port.GTP_GPDU,
+                   hdr.ipv4.totalLen + 20 + 8 + 8
+                    + 4 + 4,
+                   hdr.ipv4.totalLen + 8 + 8
+                    + 4 + 4);
+        _gtpu_encap(md.tunnel_out_teid);
+        hdr.gtpu.msglen = hdr.inner_ipv4.totalLen + 4
+                            + 4; // Override msglen set by _gtpu_encap
+        hdr.gtpu.ex_flag = 1; // Override value set by _gtpu_encap
+        hdr.gtpu_options.setValid();
+        hdr.gtpu_options.seq_num = 0;
+        hdr.gtpu_options.n_pdu_num = 0;
+        hdr.gtpu_options.next_ext = GTPU_NEXT_EXT_PSC;
+        hdr.gtpu_ext_psc.setValid();
+        hdr.gtpu_ext_psc.len = GTPU_EXT_PSC_LEN;
+        hdr.gtpu_ext_psc.type = GTPU_EXT_PSC_TYPE_DL;
+        hdr.gtpu_ext_psc.spare0 = 0;
+        hdr.gtpu_ext_psc.ppp = 0;
+        hdr.gtpu_ext_psc.rqi = 0;
+        hdr.gtpu_ext_psc.qfi = md.tunnel_out_qfi;
+        hdr.gtpu_ext_psc.next_ext = GTPU_NEXT_EXT_NONE;
+    }
+
+apply{
+    _initialize_metadata();
+
+    if ( hdr.p4ml_entries.isValid()) {
+        md.mdata.setValid();
+
+            if (hdr.ipv4.ecn == 3 || hdr.p4ml.ECN == 1) {
+                setup_ecn_table.apply();
+            }
+            // ack packet
+            if (hdr.p4ml.isACK == 1) {
+
+                if (hdr.p4ml.overflow == 1 && hdr.p4ml.isResend == 0) {
+
+                } else {
+                    appID_and_Seq.read(Check_for_appID_and_Seq,index_for_register);
+                    if(Check_for_appID_and_Seq == hdr.p4ml.appIDandSeqNum){
+                        clean_appID_and_seq_table.apply();
+                    }
+
+                    if (md.mdata.isMyAppIDandMyCurrentSeq != 0) {
+                        /* Clean */
+                        // clean_bitmap_table.apply();
+                        // clean_ecn_table.apply();
+                        // clean_agtr_time_table.apply();
+                        // // apply(cleanEntry1);
+
+                        // do_cleanEntry1();
+                        // do_cleanEntry2();
+                        // do_cleanEntry3();
+                        // do_cleanEntry4();
+                        // do_cleanEntry5();
+                        // do_cleanEntry6();
+                        // do_cleanEntry7();
+                        // do_cleanEntry8();
+                        // do_cleanEntry9();
+                        // do_cleanEntry10();
+                        // do_cleanEntry11();
+                        // do_cleanEntry12();
+                        // do_cleanEntry13();
+                        // do_cleanEntry14();
+                        // do_cleanEntry15();
+                        // do_cleanEntry16();
+                        // do_cleanEntry17();
+                        // do_cleanEntry18();
+                        // do_cleanEntry19();
+                        // do_cleanEntry20();
+                        // do_cleanEntry21();
+                        // do_cleanEntry22();
+                        // do_cleanEntry23();
+                        // do_cleanEntry24();
+                        // do_cleanEntry25();
+                        // do_cleanEntry26();
+                        // do_cleanEntry27();
+                        // do_cleanEntry28();
+                        // do_cleanEntry29();
+                        // do_cleanEntry30();
+                        // do_cleanEntry31();
+                        // do_cleanEntry32();
+                    }
+                }
+
+                // /* Multicast Back */
+
+                multicast_table.apply();
+
+            } else {
+
+                if (hdr.p4ml.overflow == 1) {
+                    outPort_table.apply();
+                } else {
+                    if (hdr.p4ml.isResend == 1) {
+                        appID_and_Seq_pair.read(Check_for_resend, index_for_register);
+                        if(Check_for_resend == hdr.p4ml.appIDandSeqNum){
+                            appID_and_seq_resend_table.apply();
+                        }
+                        else{
+                            md.mdata.isAlreadyCleared = 1;
+                        }
+
+                    } else {
+
+                        if(md.value_pair.quantization_level > 0){
+
+                        } else{
+                            appID_and_seq_table.apply();
+                        }
+
+                        appID_and_Seq_pair.read(CheckForAppIDandSeq, index_for_register);
+                        md.mdata.isMyAppIDandMyCurrentSeq = (bit<16>) CheckForAppIDandSeq;
+                    }
+                    // Correct ID and Seq
+                    if (md.mdata.isMyAppIDandMyCurrentSeq != 0){ // && ig_md.mdata.preemption == 1) {
+
+                        if (hdr.p4ml.isResend == 1) {
+                            // Clean the bitmap also
+                            bitmap_resend_table.apply(); //////0516 check
+                        } else {
+                            bitmap_table.apply();
+                        }
+                        ecn_register.read(Check_value, index_for_register);
+                        if(Check_value == 1){
+                            Check_value = Check_value | md.mdata.is_ecn;
+                            ecn_register_table.apply();
+                        }
+                        // ecn_register_table.apply();
+                        bitmap_aggregate_table.apply();
+
+                        if (hdr.p4ml.isResend == 1) {
+                            // Force forward and clean
+                            agtr_time_resend_table.apply(); //////0516 check
+                        } else {
+                            if(md.mdata.isAggregate != 0){
+                                agtr_time_table_nonzero.apply();
+                            }
+                            else{
+                                agtr_time_table_zero.apply();
+                            }
+                            // agtr_time_table.apply();
+                        }
+
+                          // if(hdr.p4ml.agtr_time == ig_md.mdata.current_agtr_time){
+                          //     ig_md.mdata.agtr_complete = true;
+                          // }
+                          // else{
+                          //     ig_md.mdata.agtr_complete = false;
+                          // }
+
+                          NewprocessEntry1.apply();
+                          NewprocessEntry2.apply();
+                          NewprocessEntry3.apply();
+                          NewprocessEntry4.apply();
+                          NewprocessEntry5.apply();
+                          NewprocessEntry6.apply();
+                          NewprocessEntry7.apply();
+                          NewprocessEntry8.apply();
+                          NewprocessEntry9.apply();
+                          NewprocessEntry10.apply();
+                          NewprocessEntry11.apply();
+                          NewprocessEntry12.apply();
+                          NewprocessEntry13.apply();
+                          NewprocessEntry14.apply();
+                          NewprocessEntry15.apply();
+                          NewprocessEntry16.apply();
+                          NewprocessEntry17.apply();
+                          NewprocessEntry18.apply();
+                          NewprocessEntry19.apply();
+                          NewprocessEntry20.apply();
+                          NewprocessEntry21.apply();
+                          NewprocessEntry22.apply();
+                          NewprocessEntry23.apply();
+                          NewprocessEntry24.apply();
+                          NewprocessEntry25.apply();
+                          NewprocessEntry26.apply();
+                          NewprocessEntry27.apply();
+                          NewprocessEntry28.apply();
+                          NewprocessEntry29.apply();
+                          NewprocessEntry30.apply();
+                          NewprocessEntry31.apply();
+                          NewprocessEntry32.apply();
+
+
+                        drop_table.apply(); /// isAggregator / agtr_complte / resubmit_flag 매치키에 추가 
+                        modify_packet_bitmap_table.apply(); /// isAggregator / agtr_complte 매치키에 추가
+                        outPort_table.apply(); /// isAggregator / agtr_complte 매치키에 추가
+
+
+                    } else {
+                        /* tag collision bit in incoming one */
+                        // if not empty
+                        if (hdr.p4ml.isResend == 0) {
+                        }
+                        outPort_table.apply();
+                    }
+                }
+            }
+    } else {
+        if(standard_metadata.ingress_port != 0){
+                // Interfaces we care about:
+                // N3 (from base station) - GTPU - match on outer IP dst
+                // N6 (from internet) - no GTPU - match on IP header dst
+                if (interfaces.apply().hit) {
+                    // Normalize so the UE address/port appear as the same field regardless of direction
+                    if (md.direction == Direction.UPLINK) {
+                        md.ue_addr = hdr.inner_ipv4.srcAddr;
+                        md.inet_addr = hdr.inner_ipv4.dstAddr;
+                        md.ue_l4_port = md.l4_sport;
+                        md.inet_l4_port = md.l4_dport;
+                        md.ip_proto = hdr.inner_ipv4.protocol;
+
+                        sessions_uplink.apply();
+                        // Need Aggregation hear!
+                    } else if (md.direction == Direction.DOWNLINK) {
+                        md.ue_addr = hdr.ipv4.dstAddr;
+                        md.inet_addr = hdr.ipv4.srcAddr;
+                        md.ue_l4_port = md.l4_dport;
+                        md.inet_l4_port = md.l4_sport;
+                        md.ip_proto = hdr.ipv4.protocol;
+
+                        sessions_downlink.apply();
+                        tunnel_peers.apply();
+                    }
+
+                    // applications.apply();
+
+                    if (md.direction == Direction.UPLINK) {
+                        terminations_uplink.apply();
+                    } else if (md.direction == Direction.DOWNLINK) {
+                        terminations_downlink.apply();
+                    }
+
+                    // Perform whatever header removal the matching in
+                    // sessions_* and terminations_* required.
+                    if (md.needs_gtpu_decap) {
+                        gtpu_decap();
+                    }
+
+                    if (md.needs_tunneling) {
+                        if (md.tunnel_out_qfi == 0) {
+                            // 4G
+                            do_gtpu_tunnel();
+                        } else {
+                            // 5G
+                            do_gtpu_tunnel_with_psc();
+                        }
+                    }
+                    if (md.needs_dropping) {
+                        do_drop();
+                    }
+                }
+            }
+        forward.apply();
+        // or Routing.apply(hdr, md, standard_metadata);
+        }
+    }
+}
+
+
+control NativeUP4Egress(
+    inout header_t hdr,
+    inout metadata_t md,
+    inout standard_metadata_t standard_metadata)
+{
+
+    bit<32> zero_index_for_eg = 0;
+    bit<32> deq_qdepth_modified = (bit<32>)standard_metadata.deq_qdepth;
+    bit<32> eg_md_mdata_qdepth = (bit<32>)md.mdata.qdepth;
+
+# 1 "IITP/NativeUP4/p4src/include/egress_registers.p4" 1
+
+
+
+register<bit<32>>(1) dqueue_alert_threshold;
+# 583 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/egress_actions.p4" 1
+
+
+
+
+action do_qdepth() {
+    // eg_md.mdata.qdepth = (bit<16>)do_comp_qdepth.execute(0);
+    dqueue_alert_threshold.write(zero_index_for_eg,deq_qdepth_modified);
+    dqueue_alert_threshold.read(eg_md_mdata_qdepth,zero_index_for_eg);
+}
+
+action modify_ecn() {
+    // modify_field(p4ml.ECN, 1);
+    hdr.p4ml.ECN = 1;
+}
+
+action mark_ecn() {
+    // bit_or(mdata.is_ecn, mdata.qdepth, mdata.is_ecn);
+    md.mdata.is_ecn = (bit<32>)md.mdata.qdepth | md.mdata.is_ecn;
+}
+
+action modify_ipv4_ecn() {
+    // modify_field(ipv4.ecn, 3);
+    hdr.ipv4.ecn = 3;
+}
+
+
+
+
+// ingress actions
+
+// action check_ecn() {
+//     ig_md.mdata.value_one = do_check_ecn.execute(hdr.p4ml_agtr_index.agtr);
+// }
+
+// action setup_ecn() { 
+//     // modify_field(mdata.is_ecn, 1);    
+//     ig_md.mdata.is_ecn = 1;
+// }
+
+// action tag_collision_incoming() {
+//     // modify_field(p4ml.isSWCollision, 1);
+//     hdr.p4ml.isSWCollision =  1;
+//     // modify_field(p4ml.bitmap, mdata.isMyAppIDandMyCurrentSeq);
+// }
+
+// action set_egr(bit<9> egress_spec) {
+//     // modify_field(ig_intr_md_for_tm.ucast_egress_port, egress_spec);
+//     ig_intr_md_for_tm.ucast_egress_port = egress_spec;
+//     // increase_p4ml_counter.execute(ig_intr_md.ingress_port);
+// }
+
+// action set_egr_and_set_index(bit<9> egress_spec) {
+//     // modify_field(ig_intr_md_for_tm.ucast_egress_port, egress_spec);
+//     ig_intr_md_for_tm.ucast_egress_port = egress_spec;
+//     // modify_field(p4ml.dataIndex, 1);
+//     hdr.p4ml.dataIndex = 1;
+//     // increase_p4ml_counter.execute(ig_intr_md.ingress_port);
+// }
+# 584 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+# 1 "IITP/NativeUP4/p4src/include/egress_tables.p4" 1
+
+
+
+
+table qdepth_table {
+    actions = {
+        do_qdepth;
+    }
+    default_action = do_qdepth();
+}
+
+table modify_ecn_table {
+    actions = {
+        modify_ecn;
+    }
+    default_action = modify_ecn();
+}
+
+table mark_ecn_ipv4_table {
+    actions = {
+        modify_ipv4_ecn;
+    }
+    default_action = modify_ipv4_ecn();
+}
+# 585 "IITP/NativeUP4/p4src/NativeUP4.p4" 2
+
+
+    action do_recirculation(){
+        recirculate_preserving_field_list(0);
+    }
+
+    action header_validation_action(){
+        hdr.p4ml_entries.setInvalid();
+        // hdr.p4ml_entries_1bit.setValid();      
+    }
+
+    table header_validation_table{
+        key={
+        }
+        actions = {
+            header_validation_action();
+        }
+        default_action = header_validation_action();
+    }
+
+    action nop()
+    {
+    }
+
+    // teid, outer ip, inner ip 변경해주는 table 및 action 작성
+    action do_modify(ipv4_addr_t outer_src_addr, ipv4_addr_t outer_dst_addr,
+                     ipv4_addr_t inner_src_addr, ipv4_addr_t inner_dst_addr,
+                     teid_t teid){
+        hdr.ipv4.srcAddr = outer_src_addr;
+        hdr.ipv4.dstAddr = outer_dst_addr;
+        hdr.inner_ipv4.srcAddr = inner_src_addr;
+        hdr.inner_ipv4.dstAddr = inner_dst_addr;
+        hdr.gtpu.teid = teid;
+    }
+
+    table Modify_hdr{
+        key = {
+            standard_metadata.egress_port: exact;
+        }
+        actions = {
+            do_modify;
+            nop;
+        }
+        default_action = nop;
+    }
+
+
+    apply{
+        if(standard_metadata.egress_port == 68){
+            do_recirculation();
+        }
+        Modify_hdr.apply();
+    }
+}
+
+V1Switch(
+    NativeUP4Parser(),
+    VerifyChecksumImpl(),
+    NativeUP4Ingress(),
+    NativeUP4Egress(),
+    ComputeChecksumImpl(),
+    NativeUP4Deparser()
+) main;
